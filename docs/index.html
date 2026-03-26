@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="description"
+        content="Router-R1: Teaching LLMs Multi-Round Routing and Aggregation via Reinforcement Learning">
+  <meta name="keywords" content="Large Language Models, Reinforcement Learning, LLM Routers">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Router-R1: Teaching LLMs Multi-Round Routing and Aggregation via Reinforcement Learning</title>
+
+  <!-- Global site tag (gtag.js) - Google Analytics -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-PYVRSFMDRL"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+
+    function gtag() {
+      dataLayer.push(arguments);
+    }
+
+    gtag('js', new Date());
+
+    gtag('config', 'G-PYVRSFMDRL');
+  </script>
+
+  <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro"
+        rel="stylesheet">
+
+  <link rel="stylesheet" href="./static/css/bulma.min.css">
+  <link rel="stylesheet" href="./static/css/bulma-carousel.min.css">
+  <link rel="stylesheet" href="./static/css/bulma-slider.min.css">
+  <link rel="stylesheet" href="./static/css/fontawesome.all.min.css">
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css">
+  <link rel="stylesheet" href="./static/css/index.css">
+
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script defer src="./static/js/fontawesome.all.min.js"></script>
+  <script src="./static/js/bulma-carousel.min.js"></script>
+  <script src="./static/js/bulma-slider.min.js"></script>
+  <script src="./static/js/index.js"></script>
+</head>
+<body>
+
+<nav class="navbar" role="navigation" aria-label="main navigation">
+  <div class="navbar-brand">
+    <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false">
+      <span aria-hidden="true"></span>
+      <span aria-hidden="true"></span>
+      <span aria-hidden="true"></span>
+    </a>
+  </div>
+  <div class="navbar-menu">
+    <div class="navbar-start" style="flex-grow: 1; justify-content: center;">
+      <a class="navbar-item" href="https://github.com/ulab-uiuc/Router-R1">
+      <span class="icon">
+          <i class="fas fa-home"></i>
+      </span>
+      </a>
+
+      <div class="navbar-item has-dropdown is-hoverable">
+        <a class="navbar-link">
+          More Research
+        </a>
+        <div class="navbar-dropdown">
+          <a class="navbar-item" href="https://github.com/ulab-uiuc/Router-R1">
+            Router-R1
+          </a>
+          <a class="navbar-item" href="https://github.com/ulab-uiuc/GraphRouter">
+            GraphRouter
+          </a>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</nav>
+
+
+<section class="hero">
+  <div class="hero-body">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered">
+        <div class="column has-text-centered">
+          <h1 class="title is-1 publication-title">Router-R1: Teaching LLMs Multi-Round Routing and Aggregation via Reinforcement Learning</h1>
+          <div class="is-size-5 publication-authors">
+            <span class="author-block">
+              <a>Haozhen Zhang</a><sup>1</sup>,</span>
+            <span class="author-block">
+              <a>Tao Feng</a>,</span>
+            <span class="author-block">
+              <a>Jiaxuan You</a>,
+            </span>
+          </div>
+
+          <div class="is-size-5 publication-authors">
+            <span class="author-block">University of Illinois at Urbana-Champaign</span><br>
+            <span class="author-block"><sup>1</sup>Work done as an intern</span>
+          </div>
+
+          <div class="column has-text-centered">
+            <div class="publication-links">
+              <span class="link-block">
+                <a href="https://arxiv.org/abs/2506.09033"
+                   class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon">
+                      <i class="ai ai-arxiv"></i>
+                  </span>
+                  <span>arXiv</span>
+                </a>
+              </span>
+              <span class="link-block">
+                <a href="https://github.com/ulab-uiuc/Router-R1"
+                   class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon">
+                      <i class="fab fa-github"></i>
+                  </span>
+                  <span>Code</span>
+                </a>
+              </span>
+              <!-- <span class="link-block">
+                <a href="xxx"
+                   class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon">
+                      <i class="fab fa-X"></i>
+                  </span>
+                  <span>Twitter</span>
+                  </a>
+              </span> -->
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+
+<section class="section">
+  <div class="container is-max-desktop">
+    <div class="columns is-centered has-text-centered">
+      <div class="column is-four-fifths">
+        <h2 class="title is-3">Abstract</h2>
+        <div class="content has-text-justified">
+          <p>
+            The rapid emergence of diverse large language models (LLMs) has spurred the development of LLM routers that assign user queries to the most suitable model. 
+            However, existing LLM routers typically perform a single-round, one-to-one mapping (<i>i.e.</i>, assigning each query to a single model in isolation), which limits their capability to tackle complex tasks that demand the complementary strengths of multiple LLMs. 
+            In this paper, we present <b>Router-R1</b>, an reinforcement learning (RL)-based framework that formulates multi-LLM routing and aggregation as a sequential decision process. 
+            Router-R1 instantiates the router itself as a capable LLM, leveraging its reasoning ability to interleave "think" actions (internal deliberation) with "route" actions (dynamic model invocation), and integrates each response into its evolving context. 
+            To guide learning, we employ a lightweight rule-based reward comprising format rewards, final outcome rewards, and a novel cost reward for performance and cost trade-off optimization, opening a pathway toward optimizing performance-cost tradeoffs via RL. 
+            Router-R1 also conditions only on simple model descriptors such as pricing, latency, and example performance, enabling strong generalization to unseen model selection. 
+            Experiments on seven general and multi-hop QA benchmarks show that Router-R1 outperforms over several strong baselines, achieving superior performance while maintaining robust generalization and cost management.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<section class="section">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered has-text-centered">
+          <div class="column is-four-fifths">
+              <h2 class="title is-3">Router-R1</h2>
+              <div class="content has-text-justified">
+                  <p>
+                    <b>(a) Single-round Routing</b>: A conventional router assigns each query to a single LLM in isolation via a one-shot decision, without internal reasoning or multi-model coordination. 
+                    <b>(b) Multi-round Routing (ours)</b>: Router-R1 casts multi-LLM routing as a sequential decision process, 
+                    which leverages an LLM-based router to interleave internal reasoning with external LLM routing and integrates retrieved information into its evolving context. 
+                    This enables adaptive multi-model coordination for complex tasks, surpassing single-round routing with better performance.
+                  </p>
+              </div>
+              <div>
+                  <img src="./static/figs/model.png" alt="model figure" width="800px"/>
+                  <p>Router-R1 Model Architecture</p>
+              </div>
+          </div>
+      </div>
+    </div>
+  </section>
+
+
+
+  <section class="section">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered has-text-centered">
+          <div class="column is-four-fifths">
+              <h2 class="title is-3">Comparison Experiments</h2>
+              <div class="content has-text-justified">
+                  <p>
+                      We evaluate Router-R1 on seven QA benchmarks, covering both general and multi-hop QA. As shown in Table below, several key findings emerge:
+                      <b>(1)</b> Router-R1 consistently outperforms all basic baselines, including Direct, CoT, SFT, and RAG, particularly on knowledge-intensive tasks. It also surpasses Search-R1, despite its multi-turn retrieval ability, highlighting the benefits of Router-R1's dynamic multi-round routing. Notably, Router-R1-Llama and Router-R1-Qwen achieve the highest average EM scores of 0.409 and 0.416, respectively.
+                      <b>(2)</b> Router-R1 beats all LLM router baselines, such as Prompt LLM, KNN Router, and their enhanced variants. Its core strength lies in using an LLM as the router, enabling interleaved reasoning and routing, which improves coordination across models and tasks.
+                      <b>(3)</b> Router-R1 generalizes well to unseen data, achieving strong performance on five out-of-domain datasets, despite being trained only on NQ and HotpotQA. This demonstrates its robust and transferable routing strategies.
+                  </p>
+              </div>
+              <img src="./static/figs/result.jpg" alt="experimental results" width="600px"/>
+              <p>Experimental results on seven QA datasets w.r.t. Exact Match.</p>
+          </div>
+      </div>
+    </div>
+  </section>
+
+
+
+  <section class="section">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered has-text-centered">
+          <div class="column is-four-fifths">
+              <h2 class="title is-3">Analysis of Cost Rewards</h2>
+              <div class="content has-text-justified">
+                  <p>
+                    We conduct an extensive study on the effect of different cost coefficients α in Router-R1 and compare with various baselines in terms of EM and average raw cost rewards. 
+                    The results shown in Table below reveal clear trade-offs: with α=0.0, Router-R1 achieves the highest EM across almost all datasets, 
+                    demonstrating its performance-oriented routing strategy. As α increases, we observe a substantial reduction in cost, accompanied by a decrease in EM, 
+                    which highlights the inherent trade-off between answer accuracy and computational efficiency. Notably, α=0.6 provides a favorable balance, 
+                    consistently achieving strong EM while substantially lowering costs compared to α=0.0. Compared to baselines, 
+                    Router-R1 with moderate α values outperforms others in both accuracy and efficiency, 
+                    validating the flexibility and effectiveness of our cost-aware reward design.
+                  </p>
+              </div>
+              <img src="./static/figs/cost.jpg" alt="cost rewards" width="600px"/>
+              <p>Extensive analysis of cost rewards on NQ, PopQA, HpQA, and 2wiki datasets w.r.t. Exact Match and raw cost rewards (unnormalized)</p>
+          </div>
+      </div>
+    </div>
+  </section>
+
+
+
+  <section class="section">
+    <div class="container is-max-desktop">
+      <div class="columns is-centered has-text-centered">
+          <div class="column is-four-fifths">
+              <h2 class="title is-3">Discussion</h2>
+              <div class="content has-text-justified">
+                  <p>
+                    <b>LLM API Call Count Analysis</b>. To assess the adaptability of Router-R1 to tasks of varying difficulty, we analyze the average number of LLM API calls (<i>i.e.</i>, the number of times candidate LLMs within the routing pool are invoked) by Route-R1-Qwen across seven QA benchmarks. 
+                    As shown in Figure (a) below, Router-R1-Qwen makes significantly more average LLM API calls on multi-hop QA benchmarks (<i>i.e.</i>, HotpotQA, 2WikiMultiHopQA, Musique, and Bamboogle) compared to general QA benchmarks (<i>i.e.</i>, NQ, TriviaQA, and PopQA). 
+                    This indicates that Router-R1 can adaptively assess task difficulty and decide whether external LLM routing is necessary, demonstrating its ability to selectively utilize external resources when tasks are more complex.
+
+                    <b>Convergence Analysis of Router-R1 Training</b>. To evaluate the convergence behavior of Router-R1, we show two crucial curves during its policy training: the reward and the policy LLM’s action entropy. 
+                    Figures (b) and (c) below illustrate that Router-R1 converges within 100 training steps, as evidenced by rising rewards and decreasing policy entropy, indicating rapid and robust convergence. It's worth noting that occasional formatting errors may cause brief drops in reward, but our hierarchical reward design swiftly corrects them, ensuring stable and accelerated learning.
+                    In particular, we observe that without format rewards, Router-R1 exhibits greater training instability, frequently generating meaningless or nonsensical text that leads to severe formatting breakdowns in the output.
+                  </p>
+              </div>
+              <img src="./static/figs/discussion.jpg" alt="discussion" width="600px"/>
+              <p>Analysis of LLM API call count and Router-R1 training convergence.</p>
+          </div>
+      </div>
+    </div>
+  </section>
+
+
+
+
+
+<section class="section" id="BibTeX">
+  <div class="container is-max-desktop content">
+    <h2 class="title">BibTeX</h2>
+    <pre><code>@article{Router-R1,
+  author    = {Haozhen Zhang and Tao Feng and Jiaxuan You},
+  title     = {Router-R1: Teaching LLMs Multi-Round Routing and Aggregation via Reinforcement Learning},
+  journal   = {arXiv preprint arXiv:2506.09033},
+  year      = {2025},
+}</code></pre>
+  </div>
+</section>
+
+
+<footer class="footer">
+  <div class="container">
+    <div class="content has-text-centered">
+      <a class="icon-link"
+         href="https://arxiv.org/abs/2506.09033">
+        <i class="fas fa-file-pdf"></i>
+      </a>
+      <a class="icon-link" href="https://github.com/ulab-uiuc/Router-R1" class="external-link" disabled>
+        <i class="fab fa-github"></i>
+      </a>
+    </div>
+    <div class="columns is-centered">
+      <div class="column is-8">
+        <div class="content">
+          <p>
+            Acknowledgement: this website is based on the template from <a
+            href="https://github.com/nerfies/nerfies.github.io">here</a>
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

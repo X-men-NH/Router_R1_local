@@ -13,30 +13,45 @@ WAND_PROJECT=${WAND_PROJECT:-'Router-R1-3B-A10080-Fast'}
 export BASE_MODEL=${BASE_MODEL:-"$MODEL_ROOT/Qwen2.5-3B-Instruct"}
 
 SERVER_TAG=${SERVER_TAG:-$(hostname -s)}
-export EXPERIMENT_NAME=${EXPERIMENT_NAME:-nh-bs64-ppo-qwen2.5-3b-it-em-a100fast-${SERVER_TAG}}
+FRESH_START=${FRESH_START:-0}
+RUN_TIMESTAMP=${RUN_TIMESTAMP:-$(date +%m%d-%H%M%S)}
+if [ "$FRESH_START" = "1" ]; then
+    DEFAULT_EXPERIMENT_NAME=nh-bs64-ppo-qwen2.5-3b-it-em-a100fast-${SERVER_TAG}-${RUN_TIMESTAMP}
+else
+    DEFAULT_EXPERIMENT_NAME=nh-bs64-ppo-qwen2.5-3b-it-em-a100fast-${SERVER_TAG}
+fi
+export EXPERIMENT_NAME=${EXPERIMENT_NAME:-$DEFAULT_EXPERIMENT_NAME}
 
 TARGET_TOTAL_STEPS=${TARGET_TOTAL_STEPS:-225}
 CKPT_ROOT=${CKPT_ROOT:-"$PROJECT_ROOT/verl_checkpoints_3b/$EXPERIMENT_NAME"}
 
-LATEST_ACTOR_CKPT=$(ls -1dt "$CKPT_ROOT/actor/global_step_"* 2>/dev/null | head -n 1)
-LATEST_CRITIC_CKPT=$(ls -1dt "$CKPT_ROOT/critic/global_step_"* 2>/dev/null | head -n 1)
-
-if [ -n "$LATEST_ACTOR_CKPT" ] && [ -n "$LATEST_CRITIC_CKPT" ]; then
-    export ACTOR_CKPT="$LATEST_ACTOR_CKPT"
-    export CRITIC_CKPT="$LATEST_CRITIC_CKPT"
-    RESUME_STEP=$(basename "$ACTOR_CKPT" | sed 's/global_step_//')
-    REMAINING_STEPS=$((TARGET_TOTAL_STEPS - RESUME_STEP))
-    if [ "$REMAINING_STEPS" -lt 1 ]; then
-        REMAINING_STEPS=1
-    fi
-else
+if [ "$FRESH_START" = "1" ]; then
     export ACTOR_CKPT="$BASE_MODEL"
     export CRITIC_CKPT="$BASE_MODEL"
     RESUME_STEP=0
     REMAINING_STEPS=$TARGET_TOTAL_STEPS
+else
+    LATEST_ACTOR_CKPT=$(ls -1dt "$CKPT_ROOT/actor/global_step_"* 2>/dev/null | head -n 1)
+    LATEST_CRITIC_CKPT=$(ls -1dt "$CKPT_ROOT/critic/global_step_"* 2>/dev/null | head -n 1)
+
+    if [ -n "$LATEST_ACTOR_CKPT" ] && [ -n "$LATEST_CRITIC_CKPT" ]; then
+        export ACTOR_CKPT="$LATEST_ACTOR_CKPT"
+        export CRITIC_CKPT="$LATEST_CRITIC_CKPT"
+        RESUME_STEP=$(basename "$ACTOR_CKPT" | sed 's/global_step_//')
+        REMAINING_STEPS=$((TARGET_TOTAL_STEPS - RESUME_STEP))
+        if [ "$REMAINING_STEPS" -lt 1 ]; then
+            REMAINING_STEPS=1
+        fi
+    else
+        export ACTOR_CKPT="$BASE_MODEL"
+        export CRITIC_CKPT="$BASE_MODEL"
+        RESUME_STEP=0
+        REMAINING_STEPS=$TARGET_TOTAL_STEPS
+    fi
 fi
 
 echo "[RUN] SERVER_TAG=$SERVER_TAG"
+echo "[RUN] FRESH_START=$FRESH_START"
 echo "[RUN] EXPERIMENT_NAME=$EXPERIMENT_NAME"
 echo "[RUN] SHARED_ROOT=$SHARED_ROOT"
 echo "[RUN] CONFIG_DIR=$CONFIG_DIR"

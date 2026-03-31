@@ -4,6 +4,8 @@ set -euo pipefail
 REPO_DIR=${REPO_DIR:-/root/autodl-tmp/Router-R1}
 ENV_NAME=${ENV_NAME:-router-r1}
 PY_VER=${PY_VER:-3.9}
+SHARED_ROOT=${SHARED_ROOT:-$(cd -- "$REPO_DIR/.." && pwd)/router-r1-shared}
+CONFIG_DIR=${CONFIG_DIR:-"$SHARED_ROOT/config"}
 
 if [ ! -d "$REPO_DIR" ]; then
   echo "[ERROR] REPO_DIR not found: $REPO_DIR"
@@ -33,22 +35,22 @@ cd "$REPO_DIR"
 pip install -r requirements.txt
 pip install -e .
 
-mkdir -p ~/.config/router-r1
-if [ ! -f ~/.config/router-r1/openrouter.env ]; then
-  cat > ~/.config/router-r1/openrouter.env <<'EOF'
+mkdir -p "$CONFIG_DIR"
+if [ ! -f "$CONFIG_DIR/openrouter.env" ]; then
+  cat > "$CONFIG_DIR/openrouter.env" <<'EOF'
 export OPENROUTER_API_KEY='replace_with_your_real_openrouter_key'
 export OPENROUTER_API_BASE='https://openrouter.ai/api/v1'
 EOF
-  chmod 600 ~/.config/router-r1/openrouter.env
-  echo "[INFO] Created ~/.config/router-r1/openrouter.env (fill real key)"
+  chmod 600 "$CONFIG_DIR/openrouter.env"
+  echo "[INFO] Created $CONFIG_DIR/openrouter.env (fill real key)"
 fi
 
-if [ ! -f ~/.config/router-r1/wandb.env ]; then
-  cat > ~/.config/router-r1/wandb.env <<'EOF'
+if [ ! -f "$CONFIG_DIR/wandb.env" ]; then
+  cat > "$CONFIG_DIR/wandb.env" <<'EOF'
 export WANDB_API_KEY='replace_with_your_real_wandb_key'
 EOF
-  chmod 600 ~/.config/router-r1/wandb.env
-  echo "[INFO] Created ~/.config/router-r1/wandb.env (optional)"
+  chmod 600 "$CONFIG_DIR/wandb.env"
+  echo "[INFO] Created $CONFIG_DIR/wandb.env (optional)"
 fi
 
 echo "[OK] Environment ready in conda env: $ENV_NAME"

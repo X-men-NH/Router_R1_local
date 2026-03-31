@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 PUBLIC_ROOT=$(cd -- "$PROJECT_ROOT/.." && pwd)
+SHARED_ROOT=${SHARED_ROOT:-"$PUBLIC_ROOT/router-r1-shared"}
 
 MINICONDA_PREFIX=${MINICONDA_PREFIX:-"$PUBLIC_ROOT/miniconda3"}
 MINICONDA_INSTALLER=${MINICONDA_INSTALLER:-"$PUBLIC_ROOT/Miniconda3-latest-Linux-x86_64.sh"}
@@ -13,7 +14,7 @@ TORCH_INDEX_URL=${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu121}
 TORCH_VERSION=${TORCH_VERSION:-2.4.0}
 VLLM_VERSION=${VLLM_VERSION:-0.6.3}
 FLASH_ATTN_VERSION=${FLASH_ATTN_VERSION:-2.6.3}
-CONFIG_DIR=${CONFIG_DIR:-"$HOME/.config/router-r1"}
+CONFIG_DIR=${CONFIG_DIR:-"$SHARED_ROOT/config"}
 
 log() {
     printf '[INFO] %s\n' "$1"

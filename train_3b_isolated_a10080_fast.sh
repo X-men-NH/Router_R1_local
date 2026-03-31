@@ -1,7 +1,12 @@
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 PROJECT_ROOT=${PROJECT_ROOT:-'/cpfs01/projects-HDD/cfff-fafaca6b7e53_HDD/public/Router-R1'}
+PUBLIC_ROOT=${PUBLIC_ROOT:-$(dirname "$PROJECT_ROOT")}
+SHARED_ROOT=${SHARED_ROOT:-"$PUBLIC_ROOT/router-r1-shared"}
+CONFIG_DIR=${CONFIG_DIR:-"$SHARED_ROOT/config"}
+SHARED_ENV_FILE=${SHARED_ENV_FILE:-"$PUBLIC_ROOT/.env.local"}
+SHARED_WANDB_FILE=${SHARED_WANDB_FILE:-"$PUBLIC_ROOT/wandb.env"}
 MODEL_ROOT=${MODEL_ROOT:-'/cpfs01/projects-HDD/cfff-fafaca6b7e53_HDD/public/model'}
-export DATA_DIR=${DATA_DIR:-"$PROJECT_ROOT/data/nq_search"}
+export DATA_DIR=${DATA_DIR:-"$SHARED_ROOT/data/nq_search"}
 NUM_GPUS=$(echo "$CUDA_VISIBLE_DEVICES" | awk -F',' '{print NF}')
 
 WAND_PROJECT=${WAND_PROJECT:-'Router-R1-3B-A10080-Fast'}
@@ -33,6 +38,11 @@ fi
 
 echo "[RUN] SERVER_TAG=$SERVER_TAG"
 echo "[RUN] EXPERIMENT_NAME=$EXPERIMENT_NAME"
+echo "[RUN] SHARED_ROOT=$SHARED_ROOT"
+echo "[RUN] CONFIG_DIR=$CONFIG_DIR"
+echo "[RUN] SHARED_ENV_FILE=$SHARED_ENV_FILE"
+echo "[RUN] SHARED_WANDB_FILE=$SHARED_WANDB_FILE"
+echo "[RUN] DATA_DIR=$DATA_DIR"
 echo "[RESUME] ACTOR_CKPT=$ACTOR_CKPT"
 echo "[RESUME] CRITIC_CKPT=$CRITIC_CKPT"
 echo "[RESUME] RESUME_STEP=$RESUME_STEP, REMAINING_STEPS=$REMAINING_STEPS"
@@ -49,6 +59,10 @@ fi
 
 [ -f "$HOME/.config/router-r1/openrouter.env" ] && source "$HOME/.config/router-r1/openrouter.env"
 [ -f "$HOME/.config/router-r1/wandb.env" ] && source "$HOME/.config/router-r1/wandb.env"
+[ -f "$CONFIG_DIR/openrouter.env" ] && source "$CONFIG_DIR/openrouter.env"
+[ -f "$CONFIG_DIR/wandb.env" ] && source "$CONFIG_DIR/wandb.env"
+[ -f "$SHARED_WANDB_FILE" ] && source "$SHARED_WANDB_FILE"
+[ -f "$SHARED_ENV_FILE" ] && set -a && source "$SHARED_ENV_FILE" && set +a
 [ -f "$PROJECT_ROOT/.env.local" ] && set -a && source "$PROJECT_ROOT/.env.local" && set +a
 
 trim_trailing_cr() {
@@ -74,7 +88,7 @@ fi
 export OPENROUTER_API_BASE=${OPENROUTER_API_BASE:-"https://openrouter.ai/api/v1"}
 if [ -z "$OPENROUTER_API_KEY" ] || [[ "$OPENROUTER_API_KEY" == *"你的真实完整key"* ]] || [[ "$OPENROUTER_API_KEY" == *"replace_with_your_real_openrouter_key"* ]]; then
     echo "[ERROR] OPENROUTER_API_KEY is not set or still a placeholder."
-    echo "[HINT] source ~/.config/router-r1/openrouter.env  (or export OPENROUTER_API_KEY=...)"
+    echo "[HINT] source $CONFIG_DIR/openrouter.env  (or export OPENROUTER_API_KEY=...)"
     exit 1
 fi
 

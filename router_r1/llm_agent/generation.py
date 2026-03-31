@@ -593,14 +593,16 @@ class LLMGenerationManager:
                         current_subq = next((item for item in curr_state if not item.get('done')), None)
                     if route_results[0].strip().lower() == "llm name error":
                         state_block = self._format_decomposition_state(curr_state)
+                        state_prefix = f"{state_block}\n" if state_block else ''
                         info_block = f"<information>{'[SubQ' + str(current_subq['id']) + '] ' if current_subq else ''}None</information>"
-                        next_obs.append(f"\n\n{state_block + '\n' if state_block else ''}{info_block}\n\n")
+                        next_obs.append(f"\n\n{state_prefix}{info_block}\n\n")
                         route_results.pop(0)
                         valid_action.append(0)
                     elif route_results[0].strip().lower() == "api request error":
                         state_block = self._format_decomposition_state(curr_state)
+                        state_prefix = f"{state_block}\n" if state_block else ''
                         info_block = f"<information>{'[SubQ' + str(current_subq['id']) + '] ' if current_subq else ''}None</information>"
-                        next_obs.append(f"\n\n{state_block + '\n' if state_block else ''}{info_block}\n\n")
+                        next_obs.append(f"\n\n{state_prefix}{info_block}\n\n")
                         route_results.pop(0)
                         valid_action.append(0)
                     else:
@@ -609,7 +611,8 @@ class LLMGenerationManager:
                             current_subq['done'] = True
                             routed_info = f"[SubQ{current_subq['id']}] {routed_info}"
                         state_block = self._format_decomposition_state(curr_state)
-                        next_obs.append(f"\n\n{state_block + '\n' if state_block else ''}<information>{routed_info}</information>\n\n")
+                        state_prefix = f"{state_block}\n" if state_block else ''
+                        next_obs.append(f"\n\n{state_prefix}<information>{routed_info}</information>\n\n")
                         valid_action.append(1)
                     dones.append(0)
                     is_route.append(1)

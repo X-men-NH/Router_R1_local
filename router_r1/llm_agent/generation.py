@@ -11,6 +11,10 @@ import shutil
 from .route_service import access_routing_pool
 
 
+ACTION_TAGS = ('decompose', 'search', 'answer')
+MAX_DECOMPOSE_QUESTIONS = 3
+
+
 @dataclass
 class GenerationConfig:
     max_turns: int
@@ -59,6 +63,28 @@ class LLMGenerationManager:
         if len(parts) != 2:
             return content.strip(), ''
         return parts[0].strip(), parts[1].strip()
+
+    def _parse_decomposition_items(self, content: str) -> List[str]:
+        if not isinstance(content, str):
+            return []
+
+        items = []
+        for raw_line in content.splitlines():
+            line = re.sub(r'^\s*(?:[-*]|\d+[.)]?)\s*', '', raw_line).strip()
+            if line:
+                items.append(line)
+        return items
+
+    def _format_decomposition_state(self, state: List[Dict[str, Any]]) -> str:
+        if not state:
+            return ''
+
+        lines = ['<decomposition_state>']
+        for item in state:
+            status = 'DONE' if item.get('done') else 'TODO'
+            lines.append(f"[SubQ{item['id']}][{status}] {item['question']}")
+        lines.append('</decomposition_state>')
+        return '\n'.join(lines)
 
     def _extract_question_text(self, prompt_text: str) -> str:
         if not isinstance(prompt_text, str):
@@ -120,6 +146,15 @@ class LLMGenerationManager:
                     f"[TRACE step={step}] idx={idx} action=answer done={done} "
                     f"answer={answer_preview!r} question={question!r}"
                 )
+            elif action == 'decompose':
+                plan_preview = content if isinstance(content, str) else ''
+                plan_preview = plan_preview.replace('\n', ' | ').strip()
+                if len(plan_preview) > self.log_max_chars:
+                    plan_preview = plan_preview[:self.log_max_chars] + '...'
+                print(
+                    f"[TRACE step={step}] idx={idx} action=decompose done={done} "
+                    f"plan={plan_preview!r} question={question!r}"
+                )
             else:
                 print(
                     f"[TRACE step={step}] idx={idx} action={action!r} done={done} question={question!r}"
@@ -157,12 +192,22 @@ class LLMGenerationManager:
             skip_special_tokens=True
         )
 
-        responses_str = [resp.split('</search>')[0] + '</search>'
-                 if '</search>' in resp
-                 else resp.split('</answer>')[0] + '</answer>'
-                 if '</answer>' in resp
-                 else resp
-                 for resp in responses_str]
+        processed_responses = []
+        for resp in responses_str:
+            close_positions = []
+            for tag in ACTION_TAGS:
+                close_tag = f'</{tag}>'
+                pos = resp.find(close_tag)
+                if pos != -1:
+                    close_positions.append((pos, close_tag))
+
+            if close_positions:
+                pos, close_tag = min(close_positions, key=lambda item: item[0])
+                processed_responses.append(resp[:pos + len(close_tag)])
+            else:
+                processed_responses.append(resp)
+
+        responses_str = processed_responses
 
 
         if self.config.no_think_rl:
@@ -324,6 +369,7 @@ class LLMGenerationManager:
         raw_prompt_texts = self.tokenizer.batch_decode(initial_input_ids, skip_special_tokens=True)
         question_texts = [self._extract_question_text(text) for text in raw_prompt_texts]
         batch_completion_tokens = torch.zeros(gen_batch.batch['input_ids'].shape[0], dtype=torch.float32)
+        decomposition_states = [None for _ in range(gen_batch.batch['input_ids'].shape[0])]
         
         active_mask = torch.ones(gen_batch.batch['input_ids'].shape[0], dtype=torch.bool)
         turns_stats = torch.ones(gen_batch.batch['input_ids'].shape[0], dtype=torch.int)
@@ -371,7 +417,7 @@ class LLMGenerationManager:
 
             # Execute in environment and process observations
             next_obs, dones, valid_action, is_route, cur_completion_tokens = self.execute_predictions(
-                responses_str, self.tokenizer.pad_token, active_mask
+                responses_str, self.tokenizer.pad_token, active_mask, decomposition_states=decomposition_states
             )
             self._maybe_log_route_trace(step, active_mask, cur_actions, contents, dones, question_texts)
             
@@ -424,7 +470,7 @@ class LLMGenerationManager:
 
             # # Execute in environment and process observations
             _, dones, valid_action, is_route, cur_completion_tokens = self.execute_predictions(
-                responses_str, self.tokenizer.pad_token, active_mask, do_route=False
+                responses_str, self.tokenizer.pad_token, active_mask, do_route=False, decomposition_states=decomposition_states
             )
             self._maybe_log_route_trace(self.config.max_turns, active_mask, cur_actions, contents, dones, question_texts)
 
@@ -482,7 +528,7 @@ class LLMGenerationManager:
         
         return final_output
 
-    def execute_predictions(self, predictions: List[str], pad_token: str, active_mask=None, do_route=True) -> List[str]:
+    def execute_predictions(self, predictions: List[str], pad_token: str, active_mask=None, do_route=True, decomposition_states=None) -> List[str]:
         """
         Execute predictions across multiple environments.
         NOTE: the function is the actual `step` function in the environment
@@ -498,6 +544,8 @@ class LLMGenerationManager:
         """
         cur_actions, contents = self.postprocess_predictions(predictions)
         next_obs, dones, valid_action, is_route, cur_completion_tokens = [], [], [], [], []
+        if decomposition_states is None:
+            decomposition_states = [None for _ in range(len(cur_actions))]
         
         route_queries = [content for action, content in zip(cur_actions, contents) if action == 'search']
         if do_route:
@@ -523,17 +571,45 @@ class LLMGenerationManager:
                     valid_action.append(1)
                     is_route.append(0)
                     cur_completion_tokens.append(0.0)
+                elif action == 'decompose':
+                    plan_lines = self._parse_decomposition_items(contents[i])
+                    if 2 <= len(plan_lines) <= MAX_DECOMPOSE_QUESTIONS:
+                        decomposition_states[i] = [
+                            {'id': idx + 1, 'question': question, 'done': False}
+                            for idx, question in enumerate(plan_lines)
+                        ]
+                        next_obs.append(f"\n\n{self._format_decomposition_state(decomposition_states[i])}\n\n")
+                        valid_action.append(1)
+                    else:
+                        next_obs.append('')
+                        valid_action.append(0)
+                    dones.append(0)
+                    is_route.append(0)
+                    cur_completion_tokens.append(0.0)
                 elif action == 'search':
+                    curr_state = decomposition_states[i]
+                    current_subq = None
+                    if curr_state:
+                        current_subq = next((item for item in curr_state if not item.get('done')), None)
                     if route_results[0].strip().lower() == "llm name error":
-                        next_obs.append(f'\n\n<information>None</information>\n\n')
+                        state_block = self._format_decomposition_state(curr_state)
+                        info_block = f"<information>{'[SubQ' + str(current_subq['id']) + '] ' if current_subq else ''}None</information>"
+                        next_obs.append(f"\n\n{state_block + '\n' if state_block else ''}{info_block}\n\n")
                         route_results.pop(0)
                         valid_action.append(0)
                     elif route_results[0].strip().lower() == "api request error":
-                        next_obs.append(f'\n\n<information>None</information>\n\n')
+                        state_block = self._format_decomposition_state(curr_state)
+                        info_block = f"<information>{'[SubQ' + str(current_subq['id']) + '] ' if current_subq else ''}None</information>"
+                        next_obs.append(f"\n\n{state_block + '\n' if state_block else ''}{info_block}\n\n")
                         route_results.pop(0)
                         valid_action.append(0)
                     else:
-                        next_obs.append(f'\n\n<information>{route_results.pop(0).strip()}</information>\n\n')
+                        routed_info = route_results.pop(0).strip()
+                        if current_subq is not None:
+                            current_subq['done'] = True
+                            routed_info = f"[SubQ{current_subq['id']}] {routed_info}"
+                        state_block = self._format_decomposition_state(curr_state)
+                        next_obs.append(f"\n\n{state_block + '\n' if state_block else ''}<information>{routed_info}</information>\n\n")
                         valid_action.append(1)
                     dones.append(0)
                     is_route.append(1)
@@ -565,7 +641,7 @@ class LLMGenerationManager:
                 
         for prediction in predictions:
             if isinstance(prediction, str): # for llm output
-                pattern = r'<(search|answer)>(.*?)</\1>'
+                pattern = r'<(decompose|search|answer)>(.*?)</\1>'
                 match = re.search(pattern, prediction, re.DOTALL)
                 if match:
                     content = match.group(2).strip()  # Return only the content inside the tags
@@ -576,6 +652,10 @@ class LLMGenerationManager:
                         action = "route invalid-2"
                     elif action == "search" and content.strip().lower().split(":")[-1].strip() == "":
                         action = "route invalid-3"
+                    elif action == "decompose":
+                        plan_lines = [line.strip(" -1234567890.") for line in content.splitlines() if line.strip()]
+                        if len(plan_lines) < 2:
+                            action = "decompose invalid-1"
                 else:
                     content = ''
                     action = None

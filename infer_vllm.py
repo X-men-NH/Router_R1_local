@@ -9,10 +9,61 @@ from data_process import prompt_pool
 from router_r1.llm_agent.route_service import access_routing_pool
 
 
-def get_query(text):
-    pattern = re.compile(r"<search>(.*?)</search>", re.DOTALL)
-    matches = pattern.findall(text)
-    return matches[-1] if matches else None
+ACTION_TAGS = ("decompose", "search", "answer")
+MAX_DECOMPOSE_QUESTIONS = 3
+
+
+def parse_action(text):
+    matches = []
+    for tag in ACTION_TAGS:
+        pattern = re.compile(rf"<{tag}>(.*?)</{tag}>", re.DOTALL)
+        for match in pattern.finditer(text):
+            matches.append((match.start(), tag, match.group(1).strip()))
+
+    if not matches:
+        return None, None
+
+    _, action, content = min(matches, key=lambda item: item[0])
+    return action, content
+
+
+def truncate_to_first_action(text):
+    close_positions = []
+    for tag in ACTION_TAGS:
+        close_tag = f"</{tag}>"
+        pos = text.find(close_tag)
+        if pos != -1:
+            close_positions.append((pos, close_tag))
+
+    if not close_positions:
+        return text
+
+    pos, close_tag = min(close_positions, key=lambda item: item[0])
+    return text[:pos + len(close_tag)]
+
+
+def parse_decomposition_items(content):
+    if not isinstance(content, str):
+        return []
+
+    items = []
+    for raw_line in content.splitlines():
+        line = re.sub(r'^\s*(?:[-*]|\d+[.)]?)\s*', '', raw_line).strip()
+        if line:
+            items.append(line)
+    return items
+
+
+def format_decomposition_state(state):
+    if not state:
+        return ''
+
+    lines = ['<decomposition_state>']
+    for item in state:
+        status = 'DONE' if item.get('done') else 'TODO'
+        lines.append(f"[SubQ{item['id']}][{status}] {item['question']}")
+    lines.append('</decomposition_state>')
+    return '\n'.join(lines)
 
 
 def route(query, api_base, api_key):
@@ -31,6 +82,7 @@ if __name__ == '__main__':
     parser.add_argument('--model_path', type=str, default="[YOUR_MODEL_PATH]")
     parser.add_argument('--api_base', type=str, default="[YOUR_API_BASE]")
     parser.add_argument('--api_key', type=str, default="[YOUR_API_KEY]")
+    parser.add_argument('--max-turns', type=int, default=5)
     args = parser.parse_args()
 
     question = args.question
@@ -48,6 +100,8 @@ if __name__ == '__main__':
     llm = LLM(model=model_id, dtype="float16", tensor_parallel_size=torch.cuda.device_count())
 
     curr_route_template = '\n{output_text}\n<information>{route_results}</information>\n'
+    curr_non_route_template = '\n{output_text}\n'
+    decomposition_state = None
 
     # Initial prompt
     prompt = prompt_pool.PROMPT_TEMPLATE_QWEN.format_map({"question": question})
@@ -59,7 +113,7 @@ if __name__ == '__main__':
     sampling_params = SamplingParams(
         temperature=1.0,
         max_tokens=1024,
-        stop=["</search>", "</answer>"]
+        stop=["</decompose>", "</search>", "</answer>"]
     )
 
     cnt = 0
@@ -68,27 +122,48 @@ if __name__ == '__main__':
     all_output = ""
 
     while True:
-        if cnt > 4:
+        if cnt >= args.max_turns:
             break
         outputs = llm.generate(prompt, sampling_params=sampling_params)
-        output_text = outputs[0].outputs[0].text
-        if output_text.find("<answer>") != -1:
+        output_text = truncate_to_first_action(outputs[0].outputs[0].text)
+        action, content = parse_action(output_text)
+        if action == "answer":
             STOP = True
-            output_text += "</answer>"
-        if not STOP:
-            output_text += "</search>"
 
         print(f"[Generation {cnt}] Output:\n{output_text}")
 
-        tmp_query = get_query(output_text)
-        if tmp_query:
-            route_results = route(tmp_query, api_base=api_base, api_key=api_key)
+        if action == "search" and content:
+            route_results = route(content, api_base=api_base, api_key=api_key)
         else:
             route_results = ''
 
         if not STOP:
-            prompt += curr_route_template.format(output_text=output_text, route_results=route_results)
-            all_output += curr_route_template.format(output_text=output_text, route_results=route_results)
+            if action == "search":
+                if decomposition_state:
+                    current_subq = next((item for item in decomposition_state if not item.get('done')), None)
+                    if current_subq is not None:
+                        current_subq['done'] = True
+                        route_results = f"[SubQ{current_subq['id']}] {route_results}"
+                    state_block = format_decomposition_state(decomposition_state)
+                    stitched = f"\n{output_text}\n{state_block}\n<information>{route_results}</information>\n"
+                    prompt += stitched
+                    all_output += stitched
+                else:
+                    prompt += curr_route_template.format(output_text=output_text, route_results=route_results)
+                    all_output += curr_route_template.format(output_text=output_text, route_results=route_results)
+            elif action == "decompose":
+                plan_lines = parse_decomposition_items(content)[:MAX_DECOMPOSE_QUESTIONS]
+                decomposition_state = [
+                    {"id": idx + 1, "question": question_text, "done": False}
+                    for idx, question_text in enumerate(plan_lines)
+                ] if len(plan_lines) >= 2 else None
+                state_block = format_decomposition_state(decomposition_state)
+                stitched = f"\n{output_text}\n{state_block}\n" if state_block else curr_non_route_template.format(output_text=output_text)
+                prompt += stitched
+                all_output += stitched
+            else:
+                prompt += curr_non_route_template.format(output_text=output_text)
+                all_output += curr_non_route_template.format(output_text=output_text)
         else:
             all_output += output_text + "\n"
             break

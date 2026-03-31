@@ -148,7 +148,7 @@ RAY_memory_usage_threshold=0.99 PYTHONUNBUFFERED=1 NCCL_P2P_DISABLE=1 NCCL_IB_DI
     trainer.total_training_steps=$REMAINING_STEPS \
     trainer.default_hdfs_dir=null \
     trainer.default_local_dir=$CKPT_ROOT \
-    max_turns=4 \
+    max_turns=5 \
     +reward_metric="em" \
     +cost_coe=0.0 \
     +api_base="'$OPENROUTER_API_BASE'" \

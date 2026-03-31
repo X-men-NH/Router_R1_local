@@ -169,5 +169,5 @@ trainer:
   default_hdfs_dir: ~/experiments/gsm8k/ppo/${trainer.experiment_name}
   default_local_dir: checkpoints/${trainer.project_name}/${trainer.experiment_name}
 
-max_turns: 10
+max_turns: 5
 do_route: true

@@ -1,7 +1,14 @@
 PROMPT_TEMPLATE_QWEN = """
 Answer the given question. \
 Every time you receive new information, you must first conduct reasoning inside <think> ... </think>. \
-After reasoning, if you find you lack some knowledge, you can call a specialized LLM by writing a query inside <search> LLM-Name:Your-Query </search>. \
+For simple questions, you should directly answer inside <answer> ... </answer> or ask a single targeted question inside <search> LLM-Name:Your-Query </search>. \
+Only when the question is genuinely multi-hop or requires combining several facts should you first decompose it inside <decompose> ... </decompose>, then solve the sub-questions across later turns. \
+
+!!! STRICT FORMAT RULES for <decompose>: !!!
+    + Use <decompose> only when decomposition is necessary. Do NOT decompose simple single-hop questions. \
+    + Inside <decompose>, write 2 or 3 concise sub-questions, one per line. Never write more than 3 sub-questions. \
+    + Each sub-question must be specific, answerable, and directly useful for solving the original question. \
+    + After a <decompose> step, later turns should solve those sub-questions using either direct reasoning or <search>. \
 
 !!! STRICT FORMAT RULES for <search>: !!!
     + You MUST replace LLM-Name with the EXACT name of a model selected from [Qwen2.5-7B-Instruct, LLaMA-3.1-8B-Instruct, LLaMA-3.1-70B-Instruct, Mistral-7B-Instruct, Mixtral-8x22B-Instruct, Gemma-2-27B-Instruct]. \
@@ -13,10 +20,14 @@ Before each LLM call, you MUST explicitly reason inside <think> ... </think> abo
     + Why external information is needed. \
     + Which model is best suited for answering it, based on the LLMs' abilities (described below). \
 
+If the question can be answered directly after reasoning, do not decompose it and do not search unnecessarily. \
+
 When you call an LLM, the response will be returned between <information> and </information>. \
 You must not limit yourself to repeatedly calling a single LLM (unless its provided information is consistently the most effective and informative). \
 You are encouraged to explore and utilize different LLMs to better understand their respective strengths and weaknesses. \
 It is also acceptable—and recommended—to call different LLMs multiple times for the same input question to gather more comprehensive information. \
+After solving enough sub-questions, you must combine them and provide the final answer to the original question inside <answer> ... </answer>. \
+If the system shows a <decomposition_state> block such as [SubQ1][TODO] or [SubQ2][DONE], you should use it to track progress and continue solving unfinished sub-questions instead of decomposing again. \
 
 
 #### The Descriptions of Each LLM \
@@ -72,7 +83,14 @@ Question: {question}\n
 PROMPT_TEMPLATE_LLAMA = """
 Answer the given question. \
 Every time you receive new information, you must first conduct reasoning inside <think> ... </think>. \
-After reasoning, if you find you lack some knowledge, you can call a specialized LLM by writing a query inside <search> LLM-Name:Your-Query </search>. \
+For simple questions, you should directly answer inside <answer> ... </answer> or ask a single targeted question inside <search> LLM-Name:Your-Query </search>. \
+Only when the question is genuinely multi-hop or requires combining several facts should you first decompose it inside <decompose> ... </decompose>, then solve the sub-questions across later turns. \
+
+!!! STRICT FORMAT RULES for <decompose>: !!!
+    + Use <decompose> only when decomposition is necessary. Do NOT decompose simple single-hop questions. \
+    + Inside <decompose>, write 2 or 3 concise sub-questions, one per line. Never write more than 3 sub-questions. \
+    + Each sub-question must be specific, answerable, and directly useful for solving the original question. \
+    + After a <decompose> step, later turns should solve those sub-questions using either direct reasoning or <search>. \
 
 !!! STRICT FORMAT RULES for <search>: !!!
     + You MUST replace LLM-Name with the EXACT name of a model selected from [Qwen2.5-7B-Instruct, LLaMA-3.1-8B-Instruct, LLaMA-3.1-70B-Instruct, Mistral-7B-Instruct, Mixtral-8x22B-Instruct, Gemma-2-27B-Instruct]. \
@@ -85,10 +103,14 @@ Before each LLM call, you MUST explicitly reason inside <think> ... </think> abo
     + Why external information is needed. \
     + Which model is best suited for answering it, based on the LLMs' abilities (described below). \
 
+If the question can be answered directly after reasoning, do not decompose it and do not search unnecessarily. \
+
 When you call an LLM, the response will be returned between <information> and </information>. \
 You must not limit yourself to repeatedly calling a single LLM (unless its provided information is consistently the most effective and informative). \
 You are encouraged to explore and utilize different LLMs to better understand their respective strengths and weaknesses. \
 It is also acceptable—and recommended—to call different LLMs multiple times for the same input question to gather more comprehensive information. \
+After solving enough sub-questions, you must combine them and provide the final answer to the original question inside <answer> ... </answer>. \
+If the system shows a <decomposition_state> block such as [SubQ1][TODO] or [SubQ2][DONE], you should use it to track progress and continue solving unfinished sub-questions instead of decomposing again. \
 
 
 #### The Descriptions of Each LLM \

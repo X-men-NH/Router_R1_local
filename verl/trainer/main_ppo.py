@@ -31,6 +31,7 @@ from router_r1.llm_agent.route_service import check_llm_name
 PUNISH_REWARD_MAX = -1.0
 PUNISH_REWARD_MEDIUM = -1.0
 PUNISH_REWARD_SMALL = -1.0
+MAX_DECOMPOSE_QUESTIONS = 3
 
 
 window_size = 1000
@@ -81,23 +82,39 @@ def is_valid_llm_name(target_llm):
         return True
 
 
+def parse_decomposition_items(content):
+    if not isinstance(content, str):
+        return []
+
+    items = []
+    for raw_line in content.splitlines():
+        line = re.sub(r'^\s*(?:[-*]|\d+[.)]?)\s*', '', raw_line).strip()
+        if line:
+            items.append(line)
+    return items
+
+
 def format_reward(completion):
-    tag_enclose_pattern = r'<(search|answer|think|information)>(.*?)</\1>'
+    tag_enclose_pattern = r'<(search|answer|think|information|decompose)>(.*?)</\1>'
     tag_enclose_matches = re.findall(tag_enclose_pattern, completion, re.DOTALL)
     if len(tag_enclose_matches) == 0:
         return PUNISH_REWARD_MAX
     
-    if completion.count("<search>") != completion.count("</search>") or completion.count("<think>") != completion.count("</think>") or completion.count("<answer>") != completion.count("</answer>") or completion.count("<information>") != completion.count("</information>"):
+    if completion.count("<search>") != completion.count("</search>") or completion.count("<think>") != completion.count("</think>") or completion.count("<answer>") != completion.count("</answer>") or completion.count("<information>") != completion.count("</information>") or completion.count("<decompose>") != completion.count("</decompose>"):
         return PUNISH_REWARD_MAX
 
     route_enclose_count = 0
     answer_enclose_count = 0
     think_enclose_count = 0
     info_enclose_count = 0
+    decompose_enclose_count = 0
     is_nesting = False
     query_format_punish = False
     llm_name_punish = False
     think_punish = False
+    decompose_punish = False
+    unnecessary_decompose_punish = False
+    decompose_question_count = 0
     for single_match in tag_enclose_matches:
         action = single_match[0].strip()
         content = single_match[1].strip()
@@ -117,10 +134,18 @@ def format_reward(completion):
             think_enclose_count += 1
             if content == "..." or content == "":
                 think_punish = True
+        elif action == "decompose":
+            decompose_enclose_count += 1
+            plan_lines = parse_decomposition_items(content)
+            decompose_question_count = max(decompose_question_count, len(plan_lines))
+            if len(plan_lines) < 2:
+                decompose_punish = True
+            if len(plan_lines) > MAX_DECOMPOSE_QUESTIONS:
+                decompose_punish = True
         else:
             info_enclose_count += 1
         
-        if content.count("<search>") + content.count("</search>") + content.count("<think>") + content.count("</think>") + content.count("<answer>") + content.count("</answer>") + content.count("<information>") + content.count("</information>") != 0:
+        if content.count("<search>") + content.count("</search>") + content.count("<think>") + content.count("</think>") + content.count("<answer>") + content.count("</answer>") + content.count("<information>") + content.count("</information>") + content.count("<decompose>") + content.count("</decompose>") != 0:
             is_nesting = True
     
 
@@ -129,6 +154,12 @@ def format_reward(completion):
 
     if is_nesting:
         return PUNISH_REWARD_MAX
+
+    if decompose_enclose_count > 1:
+        return PUNISH_REWARD_MAX
+
+    if decompose_enclose_count == 1 and route_enclose_count <= 1:
+        unnecessary_decompose_punish = True
         
     if answer_enclose_count != 1 or think_enclose_count == 0 or route_enclose_count != info_enclose_count:
         return PUNISH_REWARD_MAX
@@ -144,6 +175,12 @@ def format_reward(completion):
         return PUNISH_REWARD_MEDIUM
 
     if llm_name_punish:
+        return PUNISH_REWARD_SMALL
+
+    if decompose_punish:
+        return PUNISH_REWARD_SMALL
+
+    if unnecessary_decompose_punish:
         return PUNISH_REWARD_SMALL
 
     return 0.0
@@ -188,7 +225,7 @@ class RewardManager():
     """The reward manager.
     """
 
-    def __init__(self, config, tokenizer, num_examine, format_score=0., state="train", reward_metric="f1", max_turns=4, max_obs_length=512, cost_coe=0.0) -> None:
+    def __init__(self, config, tokenizer, num_examine, format_score=0., state="train", reward_metric="f1", max_turns=5, max_obs_length=512, cost_coe=0.0) -> None:
         self.config = config
         self.tokenizer = tokenizer
         self.num_examine = num_examine  # the number of batches of decoded responses to print to the console

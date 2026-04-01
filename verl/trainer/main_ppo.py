@@ -113,7 +113,6 @@ def format_reward(completion):
     llm_name_punish = False
     think_punish = False
     decompose_punish = False
-    unnecessary_decompose_punish = False
     decompose_question_count = 0
     for single_match in tag_enclose_matches:
         action = single_match[0].strip()
@@ -158,9 +157,6 @@ def format_reward(completion):
     if decompose_enclose_count > 1:
         return PUNISH_REWARD_MAX
 
-    if decompose_enclose_count == 1 and route_enclose_count <= 1:
-        unnecessary_decompose_punish = True
-        
     if answer_enclose_count != 1 or think_enclose_count == 0 or route_enclose_count != info_enclose_count:
         return PUNISH_REWARD_MAX
 
@@ -178,9 +174,6 @@ def format_reward(completion):
         return PUNISH_REWARD_SMALL
 
     if decompose_punish:
-        return PUNISH_REWARD_SMALL
-
-    if unnecessary_decompose_punish:
         return PUNISH_REWARD_SMALL
 
     return 0.0

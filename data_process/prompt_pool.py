@@ -144,3 +144,5 @@ This is a straightforward factual question. I know the answer directly, no exter
 ## Now answer the following question: \
 Question: {question}\n
 """
+
+PROMPT_TEMPLATE_LLAMA = PROMPT_TEMPLATE_QWEN

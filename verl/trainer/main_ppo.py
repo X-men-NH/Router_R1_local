@@ -31,7 +31,8 @@ from router_r1.llm_agent.route_service import check_llm_name
 PUNISH_REWARD_MAX = -1.0
 PUNISH_REWARD_MEDIUM = -1.0
 PUNISH_REWARD_SMALL = -1.0
-MAX_DECOMPOSE_QUESTIONS = 3
+DECOMPOSE_REWARD_BONUS = 1.0
+MAX_DECOMPOSE_QUESTIONS = 2
 
 
 window_size = 1000
@@ -113,7 +114,6 @@ def format_reward(completion):
     llm_name_punish = False
     think_punish = False
     decompose_punish = False
-    unnecessary_decompose_punish = False
     decompose_question_count = 0
     for single_match in tag_enclose_matches:
         action = single_match[0].strip()
@@ -157,9 +157,6 @@ def format_reward(completion):
 
     if decompose_enclose_count > 1:
         return PUNISH_REWARD_MAX
-
-    if decompose_enclose_count == 1 and route_enclose_count <= 1:
-        unnecessary_decompose_punish = True
         
     if answer_enclose_count != 1 or think_enclose_count == 0 or route_enclose_count != info_enclose_count:
         return PUNISH_REWARD_MAX
@@ -180,8 +177,8 @@ def format_reward(completion):
     if decompose_punish:
         return PUNISH_REWARD_SMALL
 
-    if unnecessary_decompose_punish:
-        return PUNISH_REWARD_SMALL
+    if decompose_enclose_count == 1:
+        return DECOMPOSE_REWARD_BONUS
 
     return 0.0
 

@@ -32,7 +32,7 @@ PUNISH_REWARD_MAX = -1.0
 PUNISH_REWARD_MEDIUM = -1.0
 PUNISH_REWARD_SMALL = -1.0
 DECOMPOSE_REWARD_BONUS = 1.0
-MAX_DECOMPOSE_QUESTIONS = 2
+MAX_DECOMPOSE_QUESTIONS = 3
 
 
 window_size = 1000
@@ -93,6 +93,63 @@ def parse_decomposition_items(content):
         if line:
             items.append(line)
     return items
+
+
+def extract_question_text(prompt_text):
+    if not isinstance(prompt_text, str):
+        return ''
+
+    matches = re.findall(r'Question:\s*(.*)', prompt_text, flags=re.DOTALL)
+    if matches:
+        question = matches[-1].strip()
+    else:
+        question = prompt_text.strip()
+
+    for stop_token in ['\nassistant', '<|im_start|>assistant', '<|start_header_id|>assistant']:
+        pos = question.find(stop_token)
+        if pos != -1:
+            question = question[:pos].strip()
+
+    return question
+
+
+def shorten_text(text, max_chars=240):
+    if not isinstance(text, str):
+        text = str(text)
+    text = text.replace('\n', ' ').strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + '...'
+
+
+def summarize_actions(solution_str, max_chars=180):
+    if not isinstance(solution_str, str):
+        return []
+
+    matches = re.findall(r'<(think|search|information|decompose|answer)>(.*?)</\1>', solution_str, re.DOTALL)
+    summaries = []
+    for step_idx, (action, content) in enumerate(matches, start=1):
+        content = content.strip()
+        if action == 'search':
+            parts = content.split(':', 1)
+            if len(parts) == 2:
+                model_name = shorten_text(parts[0].strip(), max_chars=48)
+                query_text = shorten_text(parts[1].strip(), max_chars=max_chars)
+                summary = f"{step_idx}. SEARCH model={model_name} query={query_text}"
+            else:
+                summary = f"{step_idx}. SEARCH {shorten_text(content, max_chars=max_chars)}"
+        elif action == 'decompose':
+            items = parse_decomposition_items(content)
+            if items:
+                joined = ' | '.join(shorten_text(item, max_chars=80) for item in items)
+                summary = f"{step_idx}. DECOMPOSE {joined}"
+            else:
+                summary = f"{step_idx}. DECOMPOSE {shorten_text(content, max_chars=max_chars)}"
+        else:
+            summary = f"{step_idx}. {action.upper()} {shorten_text(content, max_chars=max_chars)}"
+        summaries.append(summary)
+
+    return summaries
 
 
 def format_reward(completion):
@@ -232,6 +289,47 @@ class RewardManager():
         self.max_turns = max_turns
         self.max_obs_length = max_obs_length
         self.cost_coe = cost_coe
+        self.log_max_chars = int(os.getenv('ROUTER_LOG_MAX_CHARS', '240'))
+
+        env_samples_key = 'ROUTER_LOG_REWARD_SAMPLES_TRAIN' if state == 'train' else 'ROUTER_LOG_REWARD_SAMPLES_VAL'
+        env_samples_default = '1' if state == 'train' else str(max(1, num_examine))
+        self.num_examine = int(os.getenv(env_samples_key, env_samples_default))
+
+    def _log_sample(self,
+                    data_source,
+                    question_text,
+                    ground_truth,
+                    solution_str,
+                    extracted_answer,
+                    strict_format_score,
+                    route_cnt,
+                    api_cost,
+                    metric_score,
+                    reward_score):
+        gold_answers = ground_truth.get('target') if isinstance(ground_truth, dict) else ground_truth
+        if isinstance(gold_answers, list):
+            gold_answers_text = ' | '.join(str(item) for item in gold_answers)
+        else:
+            gold_answers_text = str(gold_answers)
+
+        print('==================== SAMPLE TRACE ====================')
+        print(f"[SAMPLE][{self.state}] data_source={data_source} reward_metric={self.reward_metric}")
+        print(f"[QUESTION] {shorten_text(question_text, self.log_max_chars * 2)}")
+        print(f"[GOLD] {shorten_text(gold_answers_text, self.log_max_chars * 2)}")
+        print(f"[FINAL_ANSWER] {shorten_text(extracted_answer if extracted_answer is not None else 'None', self.log_max_chars)}")
+        print(
+            f"[SCORES] metric={metric_score} format={strict_format_score} "
+            f"reward={reward_score} api_cost={api_cost} routes={route_cnt}"
+        )
+        action_summaries = summarize_actions(solution_str, max_chars=self.log_max_chars)
+        if action_summaries:
+            print('[ACTIONS]')
+            for summary in action_summaries:
+                print(summary)
+        else:
+            print('[ACTIONS] none-parsed')
+        print(f"[RAW_TRAJECTORY] {shorten_text(solution_str, self.log_max_chars * 4)}")
+        print('======================================================')
 
     def __call__(self, data: DataProto):
         """We will expand this function gradually based on the available datasets"""
@@ -266,10 +364,13 @@ class RewardManager():
 
             # decode
             # sequences = torch.cat((valid_prompt_ids, valid_response_ids))
+            prompt_str = self.tokenizer.decode(valid_prompt_ids)
+            question_text = extract_question_text(prompt_str)
             sequences = valid_response_ids
             sequences_str = self.tokenizer.decode(sequences)
             strict_format_score = format_reward(completion=sequences_str)
             route_cnt = route_count(completion=sequences_str)
+            extracted_answer = qa_em.extract_solution(solution_str=sequences_str)
 
             ground_truth = data_item.non_tensor_batch['reward_model']['ground_truth']
 
@@ -284,10 +385,12 @@ class RewardManager():
             if self.state == "train":
                 metric_score, cost_score, reward_score = compute_score_fn(solution_str=sequences_str, ground_truth=ground_truth, format_score=strict_format_score, api_cost=api_cost, state=self.state, reward_metric=self.reward_metric, cost_coe=self.cost_coe)
                 metric_tensor[i, valid_response_length - 1] = metric_score
+                display_metric = metric_score
             else:
                 metric_score_em, metric_score_f1, cost_score, reward_score = compute_score_fn(solution_str=sequences_str, ground_truth=ground_truth, format_score=strict_format_score, api_cost=api_cost, state=self.state, reward_metric=self.reward_metric, cost_coe=self.cost_coe)
                 metric_em_tensor[i, valid_response_length - 1] = metric_score_em
                 metric_f1_tensor[i, valid_response_length - 1] = metric_score_f1
+                display_metric = metric_score_f1 if self.reward_metric == 'f1' else metric_score_em
 
             reward_tensor[i, valid_response_length - 1] = reward_score
             cost_tensor[i, valid_response_length - 1] = cost_score
@@ -299,7 +402,18 @@ class RewardManager():
 
             if already_print_data_sources[data_source] < self.num_examine:
                 already_print_data_sources[data_source] += 1
-                # print(sequences_str)
+                self._log_sample(
+                    data_source=data_source,
+                    question_text=question_text,
+                    ground_truth=ground_truth,
+                    solution_str=sequences_str,
+                    extracted_answer=extracted_answer,
+                    strict_format_score=strict_format_score,
+                    route_cnt=route_cnt,
+                    api_cost=api_cost,
+                    metric_score=display_metric,
+                    reward_score=reward_score,
+                )
         
         # print(f"[DEBUG] all_scores: {all_scores}")
         # print(f"[DEBUG] all_scores shape: {np.array(all_scores).shape}")

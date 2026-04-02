@@ -1,11 +1,11 @@
 PROMPT_TEMPLATE_QWEN = """
 Answer the given question. \
 Every time you receive new information, you must first conduct reasoning inside <think> ... </think>. \
-For simple questions, you should directly answer inside <answer> ... </answer> or ask a single targeted question inside <search> LLM-Name:Your-Query </search>. \
-Only when the question is genuinely multi-hop or requires combining several facts should you first decompose it inside <decompose> ... </decompose>, then solve the sub-questions across later turns. \
+For simple questions, you may respond concisely inside <answer> ... </answer> or ask a single targeted question inside <search> LLM-Name:Your-Query </search>. \
+For questions that appear multi-hop or likely require combining several facts, prefer to first decompose them inside <decompose> ... </decompose>, then solve the sub-questions across later turns. \
 
 !!! STRICT FORMAT RULES for <decompose>: !!!
-    + Use <decompose> only when decomposition is necessary. Do NOT decompose simple single-hop questions. \
+    + For multi-hop-leaning questions, prefer using <decompose> before moving into later solving steps. \
     + Inside <decompose>, write 2 or 3 concise sub-questions, one per line. Never write more than 3 sub-questions. \
     + Each sub-question must be specific, answerable, and directly useful for solving the original question. \
     + After a <decompose> step, later turns should solve those sub-questions using either direct reasoning or <search>. \
@@ -20,7 +20,7 @@ Before each LLM call, you MUST explicitly reason inside <think> ... </think> abo
     + Why external information is needed. \
     + Which model is best suited for answering it, based on the LLMs' abilities (described below). \
 
-If the question can be answered directly after reasoning, do not decompose it and do not search unnecessarily. \
+If the question is straightforward, you may still answer directly after reasoning, but avoid unnecessary extra actions. \
 
 When you call an LLM, the response will be returned between <information> and </information>. \
 You must not limit yourself to repeatedly calling a single LLM (unless its provided information is consistently the most effective and informative). \
@@ -83,11 +83,11 @@ Question: {question}\n
 PROMPT_TEMPLATE_LLAMA = """
 Answer the given question. \
 Every time you receive new information, you must first conduct reasoning inside <think> ... </think>. \
-For simple questions, you should directly answer inside <answer> ... </answer> or ask a single targeted question inside <search> LLM-Name:Your-Query </search>. \
-Only when the question is genuinely multi-hop or requires combining several facts should you first decompose it inside <decompose> ... </decompose>, then solve the sub-questions across later turns. \
+For simple questions, you may respond concisely inside <answer> ... </answer> or ask a single targeted question inside <search> LLM-Name:Your-Query </search>. \
+For questions that appear multi-hop or likely require combining several facts, prefer to first decompose them inside <decompose> ... </decompose>, then solve the sub-questions across later turns. \
 
 !!! STRICT FORMAT RULES for <decompose>: !!!
-    + Use <decompose> only when decomposition is necessary. Do NOT decompose simple single-hop questions. \
+    + For multi-hop-leaning questions, prefer using <decompose> before moving into later solving steps. \
     + Inside <decompose>, write 2 or 3 concise sub-questions, one per line. Never write more than 3 sub-questions. \
     + Each sub-question must be specific, answerable, and directly useful for solving the original question. \
     + After a <decompose> step, later turns should solve those sub-questions using either direct reasoning or <search>. \
@@ -103,7 +103,7 @@ Before each LLM call, you MUST explicitly reason inside <think> ... </think> abo
     + Why external information is needed. \
     + Which model is best suited for answering it, based on the LLMs' abilities (described below). \
 
-If the question can be answered directly after reasoning, do not decompose it and do not search unnecessarily. \
+If the question is straightforward, you may still answer directly after reasoning, but avoid unnecessary extra actions. \
 
 When you call an LLM, the response will be returned between <information> and </information>. \
 You must not limit yourself to repeatedly calling a single LLM (unless its provided information is consistently the most effective and informative). \

@@ -31,7 +31,7 @@ from router_r1.llm_agent.route_service import check_llm_name
 PUNISH_REWARD_MAX = -1.0
 PUNISH_REWARD_MEDIUM = -1.0
 PUNISH_REWARD_SMALL = -1.0
-DECOMPOSE_REWARD_BONUS = 1.0
+REASONABLE_DECOMPOSE_BONUS = 1.0
 MAX_DECOMPOSE_QUESTIONS = 3
 
 
@@ -234,8 +234,15 @@ def format_reward(completion):
     if decompose_punish:
         return PUNISH_REWARD_SMALL
 
-    if decompose_enclose_count == 1:
-        return DECOMPOSE_REWARD_BONUS
+    has_reasonable_decomposition = (
+        decompose_enclose_count == 1 and
+        decompose_question_count >= 2 and
+        route_enclose_count >= 1 and
+        info_enclose_count >= 1
+    )
+
+    if has_reasonable_decomposition:
+        return REASONABLE_DECOMPOSE_BONUS
 
     return 0.0
 

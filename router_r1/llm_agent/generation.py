@@ -90,13 +90,21 @@ class LLMGenerationManager:
         if not isinstance(prompt_text, str):
             return ''
 
-        # Prefer the dataset template field: "Question: {question}"
-        matches = re.findall(r'Question:\s*(.*)', prompt_text, flags=re.DOTALL)
-        if matches:
-            question = matches[-1].strip()
+        question = prompt_text
+        final_question_marker = '## Now answer the following question:'
+        if final_question_marker in question:
+            question = question.rsplit(final_question_marker, 1)[-1]
+
+        line_matches = re.findall(r'(?m)^\s*Question:\s*(.+?)\s*$', question)
+        if line_matches:
+            question = line_matches[-1].strip()
         else:
-            # Fallback for chat-template variants without explicit marker.
-            question = prompt_text.split('user')[-1].strip() if 'user' in prompt_text else prompt_text.strip()
+            inline_matches = re.findall(r'Question:\s*([^\n]+)', question)
+            if inline_matches:
+                question = inline_matches[-1].strip()
+            else:
+                # Fallback for chat-template variants without explicit marker.
+                question = prompt_text.split('user')[-1].strip() if 'user' in prompt_text else prompt_text.strip()
 
         # Trim possible assistant suffix introduced by chat templates.
         for stop_token in ['\nassistant', '<|im_start|>assistant', '<|start_header_id|>assistant']:

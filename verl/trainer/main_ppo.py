@@ -31,8 +31,6 @@ from router_r1.llm_agent.route_service import check_llm_name
 PUNISH_REWARD_MAX = -1.0
 PUNISH_REWARD_MEDIUM = -1.0
 PUNISH_REWARD_SMALL = -1.0
-REASONABLE_DECOMPOSE_BONUS = 1.0
-MAX_DECOMPOSE_QUESTIONS = 3
 
 
 window_size = 1000
@@ -179,8 +177,6 @@ def format_reward(completion):
     query_format_punish = False
     llm_name_punish = False
     think_punish = False
-    decompose_punish = False
-    decompose_question_count = 0
     for single_match in tag_enclose_matches:
         action = single_match[0].strip()
         content = single_match[1].strip()
@@ -202,12 +198,6 @@ def format_reward(completion):
                 think_punish = True
         elif action == "decompose":
             decompose_enclose_count += 1
-            plan_lines = parse_decomposition_items(content)
-            decompose_question_count = max(decompose_question_count, len(plan_lines))
-            if len(plan_lines) < 2:
-                decompose_punish = True
-            if len(plan_lines) > MAX_DECOMPOSE_QUESTIONS:
-                decompose_punish = True
         else:
             info_enclose_count += 1
         
@@ -240,19 +230,6 @@ def format_reward(completion):
     if llm_name_punish:
         return PUNISH_REWARD_SMALL
 
-    if decompose_punish:
-        return PUNISH_REWARD_SMALL
-
-    has_reasonable_decomposition = (
-        decompose_enclose_count == 1 and
-        decompose_question_count >= 2 and
-        route_enclose_count >= 1 and
-        info_enclose_count >= 1
-    )
-
-    if has_reasonable_decomposition:
-        return REASONABLE_DECOMPOSE_BONUS
-
     return 0.0
 
 
@@ -282,6 +259,36 @@ def route_count(completion):
                 route_enclose_count += 1
 
     return route_enclose_count
+
+
+# --- Decompose auxiliary reward ---
+MAX_DECOMPOSE_BONUS = 0.15
+
+
+def decompose_aux_reward(completion):
+    """Small auxiliary reward for well-formed decomposition.
+    Must be gated on answer correctness by the caller (only add when answer is correct).
+    """
+    decompose_pattern = r'<decompose>(.*?)</decompose>'
+    decompose_matches = re.findall(decompose_pattern, completion, re.DOTALL)
+
+    if len(decompose_matches) != 1:
+        return 0.0
+
+    content = decompose_matches[0].strip()
+    if not content:
+        return 0.0
+
+    # Count sub-questions via existing parser
+    plan_lines = parse_decomposition_items(content)
+    if len(plan_lines) < 2:
+        return 0.0
+
+    # Best case: exactly 2 sub-questions -> full bonus; more sub-questions -> reduced bonus
+    if len(plan_lines) == 2:
+        return MAX_DECOMPOSE_BONUS
+    else:
+        return MAX_DECOMPOSE_BONUS * 0.5
 
 
 def _select_rm_score_fn(data_source):
@@ -400,6 +407,9 @@ class RewardManager():
 
             if self.state == "train":
                 metric_score, cost_score, reward_score = compute_score_fn(solution_str=sequences_str, ground_truth=ground_truth, format_score=strict_format_score, api_cost=api_cost, state=self.state, reward_metric=self.reward_metric, cost_coe=self.cost_coe)
+                # Add decompose auxiliary reward only when answer is correct
+                if reward_score > 0:
+                    reward_score += decompose_aux_reward(sequences_str)
                 metric_tensor[i, valid_response_length - 1] = metric_score
                 display_metric = metric_score
             else:

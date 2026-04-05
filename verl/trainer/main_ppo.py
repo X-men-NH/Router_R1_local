@@ -210,9 +210,6 @@ def format_reward(completion):
 
     if is_nesting:
         return PUNISH_REWARD_MAX
-
-    if decompose_enclose_count > 1:
-        return PUNISH_REWARD_MAX
         
     if answer_enclose_count != 1 or think_enclose_count == 0 or route_enclose_count != info_enclose_count:
         return PUNISH_REWARD_MAX

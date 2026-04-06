@@ -17,6 +17,9 @@ import string
 import random
 from collections import Counter
 
+F1_SHAPING_THRESHOLD = 0.4
+F1_SHAPING_MAX_BONUS = 0.2
+
 def normalize_answer(s):
     def remove_articles(text):
         return re.sub(r"\b(a|an|the)\b", " ", text)
@@ -119,6 +122,36 @@ def f1_score(prediction: str, ground_truth: str):
     return f1
 
 
+def best_f1_score(prediction: str, golden_answers):
+    if isinstance(golden_answers, str):
+        golden_answers = [golden_answers]
+
+    score = 0.0
+    for golden_answer in golden_answers:
+        f1 = f1_score(prediction, golden_answer)
+        if f1 > score:
+            score = f1
+    return score
+
+
+def compute_answer_metrics(answer, ground_truth):
+    if answer is None:
+        return 0.0, 0.0
+
+    golden_answers = ground_truth['target']
+    score_em = 1.0 if em_check(answer, golden_answers) else 0.0
+    score_f1 = best_f1_score(answer, golden_answers)
+    return score_em, score_f1
+
+
+def f1_shaping_bonus(score_f1, score_em):
+    if score_em >= 1.0 or score_f1 <= F1_SHAPING_THRESHOLD:
+        return 0.0
+
+    scaled = (score_f1 - F1_SHAPING_THRESHOLD) / (1.0 - F1_SHAPING_THRESHOLD)
+    return float(min(F1_SHAPING_MAX_BONUS, F1_SHAPING_MAX_BONUS * scaled))
+
+
 def compute_score_em(solution_str, ground_truth, method='strict', format_score=0., score=1., cost_coe=0.0, api_cost=0.0,
                      state="train", reward_metric="f1"):
     answer = extract_solution(solution_str=solution_str)
@@ -134,78 +167,45 @@ def compute_score_em(solution_str, ground_truth, method='strict', format_score=0
         print(f"Extracted answer: {answer}")
         print(f"Solution string: {solution_str}")
 
+    score_em, score_f1 = compute_answer_metrics(answer, ground_truth)
+
     if state == "train":
-        if answer is None:
-            if format_score == -1.0:
-                return 0, api_cost, format_score
-            else:
-                return 0, api_cost, format_score * (1.0 - cost_coe)
+        if reward_metric == "f1":
+            metric_score = score_f1
+            answer_reward = score_f1
+        elif reward_metric == "hybrid":
+            metric_score = score_em
+            answer_reward = score_em + f1_shaping_bonus(score_f1, score_em)
         else:
-            if reward_metric == "f1":
-                golden_answers = ground_truth['target']
-                if isinstance(golden_answers, str):
-                    golden_answers = [golden_answers]
-                score = 0
-                for golden_answer in golden_answers:
-                    f1 = f1_score(answer, golden_answer)
-                    if f1 > score:
-                        score = f1
+            metric_score = score_em
+            answer_reward = score_em
 
-                if format_score == -1.0:
-                    return score, api_cost, format_score
-                else:
-                    if score == 0:
-                        return score, api_cost, score + format_score
-                    else:
-                        return score, api_cost, (score + format_score) * (1.0 - cost_coe) + api_cost * cost_coe
-            else:
-                if em_check(answer, ground_truth['target']):
-                    if format_score == -1.0:
-                        return score, api_cost, format_score
-                    else:
-                        return score, api_cost, (score + format_score) * (1.0 - cost_coe) + api_cost * cost_coe
-                else:
-                    if format_score == -1.0:
-                        return format_score, api_cost, format_score
-                    else:
-                        return format_score, api_cost, format_score
+        if format_score == -1.0:
+            return metric_score, api_cost, format_score
+
+        if answer_reward == 0:
+            reward_score = answer_reward + format_score
+        else:
+            reward_score = (answer_reward + format_score) * (1.0 - cost_coe) + api_cost * cost_coe
+
+        return metric_score, api_cost, reward_score
     else:
-        if answer is None:
-            if format_score == -1.0:
-                return 0, 0, api_cost, format_score
-            else:
-                return 0, 0, api_cost, format_score
+        if reward_metric == "f1":
+            answer_reward = score_f1
+        elif reward_metric == "hybrid":
+            answer_reward = score_em + f1_shaping_bonus(score_f1, score_em)
         else:
-            golden_answers = ground_truth['target']
-            if isinstance(golden_answers, str):
-                golden_answers = [golden_answers]
-            score_f1 = 0
-            for golden_answer in golden_answers:
-                f1 = f1_score(answer, golden_answer)
-                if f1 > score_f1:
-                    score_f1 = f1
+            answer_reward = score_em
 
-            if em_check(answer, ground_truth['target']):
-                score_em = 1.0
-            else:
-                score_em = 0.0
+        if format_score == -1.0:
+            return score_em, score_f1, api_cost, format_score
 
-            if format_score == -1.0:
-                if reward_metric == "f1":
-                    return score_em, score_f1, api_cost, format_score
-                else:
-                    return score_em, score_f1, api_cost, format_score
-            else:
-                if reward_metric == "f1":
-                    if score_f1 == 0:
-                        return score_em, score_f1, api_cost, score_f1 + format_score
-                    else:
-                        return score_em, score_f1, api_cost, (score_f1 + format_score) * (1.0 - cost_coe) + api_cost * cost_coe
-                else:
-                    if score_em == 0:
-                        return score_em, score_f1, api_cost, score_em + format_score
-                    else:
-                        return score_em, score_f1, api_cost, (score_em + format_score) * (1.0 - cost_coe) + api_cost * cost_coe
+        if answer_reward == 0:
+            reward_score = answer_reward + format_score
+        else:
+            reward_score = (answer_reward + format_score) * (1.0 - cost_coe) + api_cost * cost_coe
+
+        return score_em, score_f1, api_cost, reward_score
 
 
 def compute_score_subem(solution_str, ground_truth, method='strict', format_score=0., score=1.):

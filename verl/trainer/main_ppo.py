@@ -260,32 +260,63 @@ def route_count(completion):
 
 # --- Decompose auxiliary reward ---
 MAX_DECOMPOSE_BONUS = 0.15
+DECOMPOSE_STRUCTURE_BONUS = 0.03
+DECOMPOSE_PROGRESS_BONUS = 0.02
+DECOMPOSE_UTILITY_MAX_BONUS = 0.10
 
 
-def decompose_aux_reward(completion):
-    """Small auxiliary reward for well-formed decomposition.
-    Must be gated on answer correctness by the caller (only add when answer is correct).
+def has_post_decompose_progress(completion):
+    decompose_pattern = r'<decompose>(.*?)</decompose>'
+    decompose_matches = list(re.finditer(decompose_pattern, completion, re.DOTALL))
+
+    if len(decompose_matches) != 1:
+        return False
+
+    tail = completion[decompose_matches[0].end():]
+    return re.search(r'<(?:think|search|information|answer)>', tail) is not None
+
+
+def decompose_aux_reward(completion, score_em=0.0, score_f1=0.0):
+    """Auxiliary reward for decomposition that improves answer quality.
+
+    Reward is intentionally staged: valid structure, actual progress after
+    decomposition, and utility tied to the final answer quality.
     """
     decompose_pattern = r'<decompose>(.*?)</decompose>'
-    decompose_matches = re.findall(decompose_pattern, completion, re.DOTALL)
+    decompose_matches = list(re.finditer(decompose_pattern, completion, re.DOTALL))
 
     if len(decompose_matches) != 1:
         return 0.0
 
-    content = decompose_matches[0].strip()
+    content = decompose_matches[0].group(1).strip()
     if not content:
         return 0.0
 
-    # Count sub-questions via existing parser
     plan_lines = parse_decomposition_items(content)
-    if len(plan_lines) < 2:
+    if len(plan_lines) < 2 or len(plan_lines) > 3:
         return 0.0
 
-    # Best case: exactly 2 sub-questions -> full bonus; more sub-questions -> reduced bonus
-    if len(plan_lines) == 2:
-        return MAX_DECOMPOSE_BONUS
-    else:
-        return MAX_DECOMPOSE_BONUS * 0.5
+    normalized_items = []
+    for plan_line in plan_lines:
+        normalized = re.sub(r'\s+', ' ', plan_line).strip().lower()
+        if not normalized:
+            return 0.0
+        normalized_items.append(normalized)
+
+    if len(set(normalized_items)) != len(normalized_items):
+        return 0.0
+
+    bonus = DECOMPOSE_STRUCTURE_BONUS
+
+    if has_post_decompose_progress(completion):
+        bonus += DECOMPOSE_PROGRESS_BONUS
+
+    bounded_f1 = float(np.clip(score_f1, 0.0, 1.0))
+    utility_anchor = max(bounded_f1, float(np.clip(score_em, 0.0, 1.0)))
+    if utility_anchor > 0.5:
+        bonus += DECOMPOSE_UTILITY_MAX_BONUS * ((utility_anchor - 0.5) / 0.5)
+
+    return float(min(MAX_DECOMPOSE_BONUS, bonus))
 
 
 def _select_rm_score_fn(data_source):
@@ -393,6 +424,7 @@ class RewardManager():
             extracted_answer = qa_em.extract_solution(solution_str=sequences_str)
 
             ground_truth = data_item.non_tensor_batch['reward_model']['ground_truth']
+            score_em, score_f1 = qa_em.compute_answer_metrics(extracted_answer, ground_truth)
 
             # API Cost Reward
             api_cost = normalize_reward(token_price[i])
@@ -404,13 +436,12 @@ class RewardManager():
 
             if self.state == "train":
                 metric_score, cost_score, reward_score = compute_score_fn(solution_str=sequences_str, ground_truth=ground_truth, format_score=strict_format_score, api_cost=api_cost, state=self.state, reward_metric=self.reward_metric, cost_coe=self.cost_coe)
-                # Add decompose auxiliary reward only when answer is correct
-                if reward_score > 0:
-                    reward_score += decompose_aux_reward(sequences_str)
+                reward_score += decompose_aux_reward(sequences_str, score_em=score_em, score_f1=score_f1)
                 metric_tensor[i, valid_response_length - 1] = metric_score
                 display_metric = metric_score
             else:
                 metric_score_em, metric_score_f1, cost_score, reward_score = compute_score_fn(solution_str=sequences_str, ground_truth=ground_truth, format_score=strict_format_score, api_cost=api_cost, state=self.state, reward_metric=self.reward_metric, cost_coe=self.cost_coe)
+                reward_score += decompose_aux_reward(sequences_str, score_em=score_em, score_f1=score_f1)
                 metric_em_tensor[i, valid_response_length - 1] = metric_score_em
                 metric_f1_tensor[i, valid_response_length - 1] = metric_score_f1
                 display_metric = metric_score_f1 if self.reward_metric == 'f1' else metric_score_em

@@ -107,8 +107,15 @@ if [ -z "$OPENROUTER_API_KEY" ] || [[ "$OPENROUTER_API_KEY" == *"你的真实完
     exit 1
 fi
 
+DISABLE_WANDB=${DISABLE_WANDB:-0}
 TRAINER_LOGGERS=${TRAINER_LOGGERS:-"['wandb']"}
-if [ -z "$WANDB_API_KEY" ] || [[ "$WANDB_API_KEY" == *"replace_with_your_real_wandb_key"* ]]; then
+if [ "$DISABLE_WANDB" = "1" ]; then
+    echo "[RUN] DISABLE_WANDB=1 -> forcing console logging only."
+    unset WANDB_API_KEY
+    export WANDB_DISABLED=true
+    export WANDB_MODE=disabled
+    TRAINER_LOGGERS="['console']"
+elif [ -z "$WANDB_API_KEY" ] || [[ "$WANDB_API_KEY" == *"replace_with_your_real_wandb_key"* ]]; then
     echo "[WARN] WANDB_API_KEY is missing or still a placeholder. Falling back to console logging only."
     TRAINER_LOGGERS="['console']"
 fi
@@ -140,6 +147,7 @@ echo "[A100-FAST] ROUTER_POOL_SIZE=$ROUTER_POOL_SIZE ROUTER_API_TIMEOUT=$ROUTER_
 echo "[A100-FAST] TRAIN_BATCH_SIZE=$TRAIN_BATCH_SIZE VAL_BATCH_SIZE=$VAL_BATCH_SIZE ACTOR_PPO_MINI_BATCH_SIZE=$ACTOR_PPO_MINI_BATCH_SIZE ACTOR_PPO_MICRO_BATCH_SIZE=$ACTOR_PPO_MICRO_BATCH_SIZE CRITIC_PPO_MICRO_BATCH_SIZE=$CRITIC_PPO_MICRO_BATCH_SIZE"
 echo "[A100-FAST] MAX_PROMPT_LENGTH=$MAX_PROMPT_LENGTH MAX_RESPONSE_LENGTH=$MAX_RESPONSE_LENGTH MAX_START_LENGTH=$MAX_START_LENGTH MAX_OBS_LENGTH=$MAX_OBS_LENGTH"
 echo "[A100-FAST] REWARD_METRIC=$REWARD_METRIC"
+echo "[A100-FAST] TRAINER_LOGGERS=$TRAINER_LOGGERS DISABLE_WANDB=$DISABLE_WANDB"
 
 RAY_memory_usage_threshold=0.99 PYTHONUNBUFFERED=1 NCCL_P2P_DISABLE=1 NCCL_IB_DISABLE=1 PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True} "$PYTHON_BIN" -m verl.trainer.main_ppo \
     data.train_files=$DATA_DIR/train_nh_qwen.parquet \

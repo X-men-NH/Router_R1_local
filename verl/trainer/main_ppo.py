@@ -133,7 +133,7 @@ def summarize_actions(solution_str, max_chars=180):
     if not isinstance(solution_str, str):
         return []
 
-    matches = re.findall(r'<(think|search|information|decompose|answer)>(.*?)</\1>', solution_str, re.DOTALL)
+    matches = re.findall(r'<(think|search|information|decompose|subanswer|answer)>(.*?)</\1>', solution_str, re.DOTALL)
     summaries = []
     for step_idx, (action, content) in enumerate(matches, start=1):
         content = content.strip()
@@ -152,6 +152,8 @@ def summarize_actions(solution_str, max_chars=180):
                 summary = f"{step_idx}. DECOMPOSE {joined}"
             else:
                 summary = f"{step_idx}. DECOMPOSE {shorten_text(content, max_chars=max_chars)}"
+        elif action == 'subanswer':
+            summary = f"{step_idx}. SUBANSWER {shorten_text(content, max_chars=max_chars)}"
         else:
             summary = f"{step_idx}. {action.upper()} {shorten_text(content, max_chars=max_chars)}"
         summaries.append(summary)
@@ -160,12 +162,12 @@ def summarize_actions(solution_str, max_chars=180):
 
 
 def format_reward(completion):
-    tag_enclose_pattern = r'<(search|answer|think|information|decompose)>(.*?)</\1>'
+    tag_enclose_pattern = r'<(search|subanswer|answer|think|information|decompose)>(.*?)</\1>'
     tag_enclose_matches = re.findall(tag_enclose_pattern, completion, re.DOTALL)
     if len(tag_enclose_matches) == 0:
         return PUNISH_REWARD_MAX
     
-    if completion.count("<search>") != completion.count("</search>") or completion.count("<think>") != completion.count("</think>") or completion.count("<answer>") != completion.count("</answer>") or completion.count("<information>") != completion.count("</information>") or completion.count("<decompose>") != completion.count("</decompose>"):
+    if completion.count("<search>") != completion.count("</search>") or completion.count("<think>") != completion.count("</think>") or completion.count("<answer>") != completion.count("</answer>") or completion.count("<information>") != completion.count("</information>") or completion.count("<decompose>") != completion.count("</decompose>") or completion.count("<subanswer>") != completion.count("</subanswer>"):
         return PUNISH_REWARD_MAX
 
     route_enclose_count = 0
@@ -198,10 +200,12 @@ def format_reward(completion):
                 think_punish = True
         elif action == "decompose":
             decompose_enclose_count += 1
+        elif action == "subanswer":
+            pass
         else:
             info_enclose_count += 1
         
-        if content.count("<search>") + content.count("</search>") + content.count("<think>") + content.count("</think>") + content.count("<answer>") + content.count("</answer>") + content.count("<information>") + content.count("</information>") + content.count("<decompose>") + content.count("</decompose>") != 0:
+        if content.count("<search>") + content.count("</search>") + content.count("<think>") + content.count("</think>") + content.count("<answer>") + content.count("</answer>") + content.count("<information>") + content.count("</information>") + content.count("<decompose>") + content.count("</decompose>") + content.count("<subanswer>") + content.count("</subanswer>") != 0:
             is_nesting = True
     
 
@@ -259,10 +263,14 @@ def route_count(completion):
 
 
 # --- Decompose auxiliary reward ---
-MAX_DECOMPOSE_BONUS = 0.15
-DECOMPOSE_STRUCTURE_BONUS = 0.03
-DECOMPOSE_PROGRESS_BONUS = 0.02
-DECOMPOSE_UTILITY_MAX_BONUS = 0.10
+MAX_DECOMPOSE_BONUS = 0.18
+MIN_DECOMPOSE_BONUS = -0.05
+DECOMPOSE_STRUCTURE_BONUS = 0.01
+DECOMPOSE_SUBANSWER_BONUS = 0.02
+DECOMPOSE_ALL_DONE_BONUS = 0.03
+DECOMPOSE_UTILITY_MAX_BONUS = 0.05
+DECOMPOSE_EARLY_ANSWER_PENALTY = 0.03
+DECOMPOSE_UNKNOWN_ANSWER_PENALTY = 0.02
 
 
 def has_post_decompose_progress(completion):
@@ -273,7 +281,47 @@ def has_post_decompose_progress(completion):
         return False
 
     tail = completion[decompose_matches[0].end():]
-    return re.search(r'<(?:think|search|information|answer)>', tail) is not None
+    return re.search(r'<(?:think|search|information|subanswer|answer)>', tail) is not None
+
+
+def count_subanswers(completion):
+    return len(re.findall(r'<subanswer>(.*?)</subanswer>', completion, re.DOTALL))
+
+
+def all_subquestions_solved_before_final_answer(completion):
+    answer_match = re.search(r'<answer>.*?</answer>', completion, re.DOTALL)
+    if answer_match is None:
+        return False
+
+    prefix = completion[:answer_match.start()]
+    state_matches = re.findall(r'<decomposition_state>(.*?)</decomposition_state>', prefix, re.DOTALL)
+    if not state_matches:
+        return False
+
+    last_state = state_matches[-1]
+    return '[TODO]' not in last_state and '[DONE]' in last_state
+
+
+def has_early_answer_with_todo(completion):
+    answer_match = re.search(r'<answer>.*?</answer>', completion, re.DOTALL)
+    if answer_match is None:
+        return False
+
+    prefix = completion[:answer_match.start()]
+    state_matches = re.findall(r'<decomposition_state>(.*?)</decomposition_state>', prefix, re.DOTALL)
+    if not state_matches:
+        return False
+
+    return '[TODO]' in state_matches[-1]
+
+
+def is_unknown_final_answer(completion):
+    answer = qa_em.extract_solution(completion)
+    if not isinstance(answer, str):
+        return False
+
+    normalized = re.sub(r'\s+', ' ', answer).strip().lower()
+    return normalized in {'unknown', 'none', 'n/a', 'cannot determine', 'not enough information'}
 
 
 def decompose_aux_reward(completion, score_em=0.0, score_f1=0.0):
@@ -308,15 +356,24 @@ def decompose_aux_reward(completion, score_em=0.0, score_f1=0.0):
 
     bonus = DECOMPOSE_STRUCTURE_BONUS
 
-    if has_post_decompose_progress(completion):
-        bonus += DECOMPOSE_PROGRESS_BONUS
+    solved_subqs = min(len(plan_lines), count_subanswers(completion))
+    bonus += solved_subqs * DECOMPOSE_SUBANSWER_BONUS
+
+    if all_subquestions_solved_before_final_answer(completion):
+        bonus += DECOMPOSE_ALL_DONE_BONUS
 
     bounded_f1 = float(np.clip(score_f1, 0.0, 1.0))
     utility_anchor = max(bounded_f1, float(np.clip(score_em, 0.0, 1.0)))
     if utility_anchor > 0.5:
         bonus += DECOMPOSE_UTILITY_MAX_BONUS * ((utility_anchor - 0.5) / 0.5)
 
-    return float(min(MAX_DECOMPOSE_BONUS, bonus))
+    if has_early_answer_with_todo(completion):
+        bonus -= DECOMPOSE_EARLY_ANSWER_PENALTY
+
+    if is_unknown_final_answer(completion) and utility_anchor <= 0.0:
+        bonus -= DECOMPOSE_UNKNOWN_ANSWER_PENALTY
+
+    return float(np.clip(bonus, MIN_DECOMPOSE_BONUS, MAX_DECOMPOSE_BONUS))
 
 
 def _select_rm_score_fn(data_source):

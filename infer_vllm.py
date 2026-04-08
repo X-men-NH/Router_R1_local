@@ -9,7 +9,7 @@ from data_process import prompt_pool
 from router_r1.llm_agent.route_service import access_routing_pool
 
 
-ACTION_TAGS = ("decompose", "search", "answer")
+ACTION_TAGS = ("decompose", "search", "subanswer", "answer")
 MAX_DECOMPOSE_QUESTIONS = 3
 
 
@@ -61,9 +61,18 @@ def format_decomposition_state(state):
     lines = ['<decomposition_state>']
     for item in state:
         status = 'DONE' if item.get('done') else 'TODO'
-        lines.append(f"[SubQ{item['id']}][{status}] {item['question']}")
+        line = f"[SubQ{item['id']}][{status}] {item['question']}"
+        if item.get('done') and item.get('answer'):
+            line += f" => {item['answer']}"
+        lines.append(line)
     lines.append('</decomposition_state>')
     return '\n'.join(lines)
+
+
+def get_current_subq(state):
+    if not state:
+        return None
+    return next((item for item in state if not item.get('done')), None)
 
 
 def route(query, api_base, api_key):
@@ -113,7 +122,7 @@ if __name__ == '__main__':
     sampling_params = SamplingParams(
         temperature=1.0,
         max_tokens=1024,
-        stop=["</decompose>", "</search>", "</answer>"]
+        stop=["</decompose>", "</search>", "</subanswer>", "</answer>"]
     )
 
     cnt = 0
@@ -127,7 +136,8 @@ if __name__ == '__main__':
         outputs = llm.generate(prompt, sampling_params=sampling_params)
         output_text = truncate_to_first_action(outputs[0].outputs[0].text)
         action, content = parse_action(output_text)
-        if action == "answer":
+        current_subq = get_current_subq(decomposition_state)
+        if action == "answer" and current_subq is None:
             STOP = True
 
         print(f"[Generation {cnt}] Output:\n{output_text}")
@@ -138,11 +148,19 @@ if __name__ == '__main__':
             route_results = ''
 
         if not STOP:
+            if action == "answer" and current_subq is not None:
+                stitched = (
+                    f"\n{output_text}\n{format_decomposition_state(decomposition_state)}\n"
+                    "Finish the current TODO sub-question with <subanswer> before giving the final answer.\n"
+                )
+                prompt += stitched
+                all_output += stitched
             if action == "search":
                 if decomposition_state:
-                    current_subq = next((item for item in decomposition_state if not item.get('done')), None)
+                    current_subq = get_current_subq(decomposition_state)
                     if current_subq is not None:
-                        current_subq['done'] = True
+                        current_subq['attempts'] = current_subq.get('attempts', 0) + 1
+                        current_subq.setdefault('evidence', []).append(route_results)
                         route_results = f"[SubQ{current_subq['id']}] {route_results}"
                     state_block = format_decomposition_state(decomposition_state)
                     stitched = f"\n{output_text}\n{state_block}\n<information>{route_results}</information>\n"
@@ -151,10 +169,19 @@ if __name__ == '__main__':
                 else:
                     prompt += curr_route_template.format(output_text=output_text, route_results=route_results)
                     all_output += curr_route_template.format(output_text=output_text, route_results=route_results)
+            elif action == "subanswer":
+                current_subq = get_current_subq(decomposition_state)
+                if current_subq is not None:
+                    current_subq["answer"] = content
+                    current_subq["done"] = True
+                state_block = format_decomposition_state(decomposition_state)
+                stitched = f"\n{output_text}\n{state_block}\n"
+                prompt += stitched
+                all_output += stitched
             elif action == "decompose":
                 plan_lines = parse_decomposition_items(content)[:MAX_DECOMPOSE_QUESTIONS]
                 decomposition_state = [
-                    {"id": idx + 1, "question": question_text, "done": False}
+                    {"id": idx + 1, "question": question_text, "done": False, "attempts": 0, "answer": None, "evidence": []}
                     for idx, question_text in enumerate(plan_lines)
                 ] if len(plan_lines) >= 2 else None
                 state_block = format_decomposition_state(decomposition_state)

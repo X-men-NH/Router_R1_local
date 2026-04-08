@@ -11,7 +11,7 @@ import shutil
 from .route_service import access_routing_pool
 
 
-ACTION_TAGS = ('decompose', 'search', 'answer')
+ACTION_TAGS = ('decompose', 'search', 'subanswer', 'answer')
 MAX_DECOMPOSE_QUESTIONS = 3
 
 
@@ -82,9 +82,20 @@ class LLMGenerationManager:
         lines = ['<decomposition_state>']
         for item in state:
             status = 'DONE' if item.get('done') else 'TODO'
-            lines.append(f"[SubQ{item['id']}][{status}] {item['question']}")
+            line = f"[SubQ{item['id']}][{status}] {item['question']}"
+            if item.get('done') and item.get('answer'):
+                answer = str(item['answer']).replace('\n', ' ').strip()
+                if len(answer) > self.log_max_chars:
+                    answer = answer[:self.log_max_chars] + '...'
+                line += f" => {answer}"
+            lines.append(line)
         lines.append('</decomposition_state>')
         return '\n'.join(lines)
+
+    def _get_current_subq(self, state: List[Dict[str, Any]]):
+        if not state:
+            return None
+        return next((item for item in state if not item.get('done')), None)
 
     def _extract_question_text(self, prompt_text: str) -> str:
         if not isinstance(prompt_text, str):
@@ -162,6 +173,14 @@ class LLMGenerationManager:
                 print(
                     f"[TRACE step={step}] idx={idx} action=decompose done={done} "
                     f"plan={plan_preview!r} question={question!r}"
+                )
+            elif action == 'subanswer':
+                subanswer_preview = content if isinstance(content, str) else ''
+                if len(subanswer_preview) > self.log_max_chars:
+                    subanswer_preview = subanswer_preview[:self.log_max_chars] + '...'
+                print(
+                    f"[TRACE step={step}] idx={idx} action=subanswer done={done} "
+                    f"subanswer={subanswer_preview!r} question={question!r}"
                 )
             else:
                 print(
@@ -574,16 +593,32 @@ class LLMGenerationManager:
                 cur_completion_tokens.append(0.0)
             else:
                 if action == 'answer':
-                    next_obs.append('')
-                    dones.append(1)
-                    valid_action.append(1)
+                    curr_state = decomposition_states[i]
+                    unfinished = curr_state and self._get_current_subq(curr_state) is not None
+                    if unfinished:
+                        state_block = self._format_decomposition_state(curr_state)
+                        reminder = 'Finish the current TODO sub-question with <subanswer> before giving the final answer.'
+                        next_obs.append(f"\n\n{state_block}\n{reminder}\n\n")
+                        dones.append(0)
+                        valid_action.append(0)
+                    else:
+                        next_obs.append('')
+                        dones.append(1)
+                        valid_action.append(1)
                     is_route.append(0)
                     cur_completion_tokens.append(0.0)
                 elif action == 'decompose':
                     plan_lines = self._parse_decomposition_items(contents[i])
                     if 2 <= len(plan_lines) <= MAX_DECOMPOSE_QUESTIONS:
                         decomposition_states[i] = [
-                            {'id': idx + 1, 'question': question, 'done': False}
+                            {
+                                'id': idx + 1,
+                                'question': question,
+                                'done': False,
+                                'attempts': 0,
+                                'answer': None,
+                                'evidence': [],
+                            }
                             for idx, question in enumerate(plan_lines)
                         ]
                         next_obs.append(f"\n\n{self._format_decomposition_state(decomposition_states[i])}\n\n")
@@ -594,11 +629,26 @@ class LLMGenerationManager:
                     dones.append(0)
                     is_route.append(0)
                     cur_completion_tokens.append(0.0)
+                elif action == 'subanswer':
+                    curr_state = decomposition_states[i]
+                    current_subq = self._get_current_subq(curr_state)
+                    subanswer_text = contents[i].strip()
+                    if current_subq is None or not subanswer_text:
+                        state_block = self._format_decomposition_state(curr_state)
+                        next_obs.append(f"\n\n{state_block}\n\n" if state_block else '')
+                        valid_action.append(0)
+                    else:
+                        current_subq['answer'] = subanswer_text
+                        current_subq['done'] = True
+                        state_block = self._format_decomposition_state(curr_state)
+                        next_obs.append(f"\n\n{state_block}\n\n")
+                        valid_action.append(1)
+                    dones.append(0)
+                    is_route.append(0)
+                    cur_completion_tokens.append(0.0)
                 elif action == 'search':
                     curr_state = decomposition_states[i]
-                    current_subq = None
-                    if curr_state:
-                        current_subq = next((item for item in curr_state if not item.get('done')), None)
+                    current_subq = self._get_current_subq(curr_state)
                     if route_results[0].strip().lower() == "llm name error":
                         state_block = self._format_decomposition_state(curr_state)
                         state_prefix = f"{state_block}\n" if state_block else ''
@@ -616,7 +666,8 @@ class LLMGenerationManager:
                     else:
                         routed_info = route_results.pop(0).strip()
                         if current_subq is not None:
-                            current_subq['done'] = True
+                            current_subq['attempts'] = current_subq.get('attempts', 0) + 1
+                            current_subq.setdefault('evidence', []).append(routed_info)
                             routed_info = f"[SubQ{current_subq['id']}] {routed_info}"
                         state_block = self._format_decomposition_state(curr_state)
                         state_prefix = f"{state_block}\n" if state_block else ''
@@ -652,7 +703,7 @@ class LLMGenerationManager:
                 
         for prediction in predictions:
             if isinstance(prediction, str): # for llm output
-                pattern = r'<(decompose|search|answer)>(.*?)</\1>'
+                pattern = r'<(decompose|search|subanswer|answer)>(.*?)</\1>'
                 match = re.search(pattern, prediction, re.DOTALL)
                 if match:
                     content = match.group(2).strip()  # Return only the content inside the tags

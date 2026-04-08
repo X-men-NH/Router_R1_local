@@ -12,8 +12,11 @@ data:
 model:
   path: ~/models/Qwen2-7B-Instruct
   external_lib: null
+actor:
+  ulysses_sequence_parallel_size: 1
 rollout:
   name: vllm
+  n: 1
   temperature: 1.0
   top_k: 50 # 0 for hf rollout, -1 for vllm rollout
   top_p: 0.7

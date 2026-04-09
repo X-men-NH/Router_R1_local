@@ -18,6 +18,11 @@ Note that we don't combine the main with ray_trainer as ray_trainer is used by o
 from verl import DataProto
 import torch
 from verl.utils.reward_score import qa_em
+from verl.utils.action_trajectory import (
+    extract_action_response_text,
+    get_last_action_token_index,
+    get_response_info_mask,
+)
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 import os
 import re
@@ -217,7 +222,10 @@ def format_reward(completion):
     if is_nesting:
         return PUNISH_REWARD_MAX
         
-    if answer_enclose_count != 1 or think_enclose_count == 0 or route_enclose_count != info_enclose_count:
+    if answer_enclose_count != 1 or think_enclose_count == 0:
+        return PUNISH_REWARD_MAX
+
+    if info_enclose_count not in (0, route_enclose_count):
         return PUNISH_REWARD_MAX
 
     completion = completion.strip()
@@ -290,31 +298,32 @@ def count_subanswers(completion):
     return len(re.findall(r'<subanswer>(.*?)</subanswer>', completion, re.DOTALL))
 
 
-def all_subquestions_solved_before_final_answer(completion):
+def count_subanswers_before_first_answer(completion):
+    answer_match = re.search(r'<answer>.*?</answer>', completion, re.DOTALL)
+    if answer_match is None:
+        return 0
+
+    prefix = completion[:answer_match.start()]
+    return count_subanswers(prefix)
+
+
+def all_subquestions_solved_before_final_answer(completion, total_subquestions):
+    if total_subquestions <= 0:
+        return False
+    if re.search(r'<answer>.*?</answer>', completion, re.DOTALL) is None:
+        return False
+    return count_subanswers_before_first_answer(completion) >= total_subquestions
+
+
+def has_early_answer_with_todo(completion, total_subquestions):
     answer_match = re.search(r'<answer>.*?</answer>', completion, re.DOTALL)
     if answer_match is None:
         return False
 
-    prefix = completion[:answer_match.start()]
-    state_matches = re.findall(r'<decomposition_state>(.*?)</decomposition_state>', prefix, re.DOTALL)
-    if not state_matches:
+    if total_subquestions <= 0:
         return False
 
-    last_state = state_matches[-1]
-    return '[TODO]' not in last_state and '[DONE]' in last_state
-
-
-def has_early_answer_with_todo(completion):
-    answer_match = re.search(r'<answer>.*?</answer>', completion, re.DOTALL)
-    if answer_match is None:
-        return False
-
-    prefix = completion[:answer_match.start()]
-    state_matches = re.findall(r'<decomposition_state>(.*?)</decomposition_state>', prefix, re.DOTALL)
-    if not state_matches:
-        return False
-
-    return '[TODO]' in state_matches[-1]
+    return count_subanswers_before_first_answer(completion) < total_subquestions
 
 
 def is_unknown_final_answer(completion):
@@ -361,7 +370,7 @@ def decompose_aux_reward(completion, score_em=0.0, score_f1=0.0):
     solved_subqs = min(len(plan_lines), count_subanswers(completion))
     bonus += solved_subqs * DECOMPOSE_SUBANSWER_BONUS
 
-    if all_subquestions_solved_before_final_answer(completion):
+    if all_subquestions_solved_before_final_answer(completion, len(plan_lines)):
         bonus += DECOMPOSE_ALL_DONE_BONUS
 
     bounded_f1 = float(np.clip(score_f1, 0.0, 1.0))
@@ -369,7 +378,7 @@ def decompose_aux_reward(completion, score_em=0.0, score_f1=0.0):
     if utility_anchor > 0.5:
         bonus += DECOMPOSE_UTILITY_MAX_BONUS * ((utility_anchor - 0.5) / 0.5)
 
-    if has_early_answer_with_todo(completion):
+    if has_early_answer_with_todo(completion, len(plan_lines)):
         bonus -= DECOMPOSE_EARLY_ANSWER_PENALTY
 
     if is_unknown_final_answer(completion) and utility_anchor <= 0.0:
@@ -409,7 +418,8 @@ class RewardManager():
                     data_source,
                     question_text,
                     ground_truth,
-                    solution_str,
+                    raw_solution_str,
+                    scoring_solution_str,
                     extracted_answer,
                     strict_format_score,
                     route_cnt,
@@ -431,14 +441,15 @@ class RewardManager():
             f"[SCORES] metric={metric_score} format={strict_format_score} "
             f"reward={reward_score} api_cost={api_cost} routes={route_cnt}"
         )
-        action_summaries = summarize_actions(solution_str, max_chars=self.log_max_chars)
+        action_summaries = summarize_actions(scoring_solution_str, max_chars=self.log_max_chars)
         if action_summaries:
             print('[ACTIONS]')
             for summary in action_summaries:
                 print(summary)
         else:
             print('[ACTIONS] none-parsed')
-        print(f"[RAW_TRAJECTORY] {shorten_text(solution_str, self.log_max_chars * 4)}")
+        print(f"[ACTION_TRAJECTORY] {shorten_text(scoring_solution_str, self.log_max_chars * 4)}")
+        print(f"[RAW_TRAJECTORY] {shorten_text(raw_solution_str, self.log_max_chars * 4)}")
         print('======================================================')
 
     def __call__(self, data: DataProto):
@@ -469,7 +480,18 @@ class RewardManager():
             valid_prompt_ids = prompt_ids[-valid_prompt_length:]
 
             response_ids = data_item.batch['responses']
-            valid_response_length = data_item.batch['attention_mask'][prompt_length:].sum()
+            response_length = response_ids.shape[-1]
+            response_attention_mask = data_item.batch['attention_mask'][prompt_length:prompt_length + response_length]
+            if 'info_mask' in data_item.batch:
+                response_info_mask = get_response_info_mask(
+                    data_item.batch['info_mask'],
+                    prompt_length=prompt_length,
+                    response_length=response_length,
+                )
+            else:
+                response_info_mask = response_attention_mask
+
+            valid_response_length = response_attention_mask.sum()
             valid_response_ids = response_ids[:valid_response_length]
 
             # decode
@@ -478,9 +500,17 @@ class RewardManager():
             question_text = extract_question_text(prompt_str)
             sequences = valid_response_ids
             sequences_str = self.tokenizer.decode(sequences)
-            strict_format_score = format_reward(completion=sequences_str)
-            route_cnt = route_count(completion=sequences_str)
-            extracted_answer = qa_em.extract_solution(solution_str=sequences_str)
+            scoring_sequences_str = extract_action_response_text(
+                self.tokenizer,
+                response_ids=response_ids,
+                response_info_mask=response_info_mask,
+            )
+            if not scoring_sequences_str:
+                scoring_sequences_str = sequences_str
+
+            strict_format_score = format_reward(completion=scoring_sequences_str)
+            route_cnt = route_count(completion=scoring_sequences_str)
+            extracted_answer = qa_em.extract_solution(solution_str=scoring_sequences_str)
 
             ground_truth = data_item.non_tensor_batch['reward_model']['ground_truth']
             score_em, score_f1 = qa_em.compute_answer_metrics(extracted_answer, ground_truth)
@@ -492,22 +522,23 @@ class RewardManager():
             # select rm_score
             data_source = data_item.non_tensor_batch['data_source']
             compute_score_fn = _select_rm_score_fn(data_source)
+            reward_token_idx = get_last_action_token_index(response_attention_mask, response_info_mask)
 
             if self.state == "train":
-                metric_score, cost_score, reward_score = compute_score_fn(solution_str=sequences_str, ground_truth=ground_truth, format_score=strict_format_score, api_cost=api_cost, state=self.state, reward_metric=self.reward_metric, cost_coe=self.cost_coe)
-                reward_score += decompose_aux_reward(sequences_str, score_em=score_em, score_f1=score_f1)
-                metric_tensor[i, valid_response_length - 1] = metric_score
+                metric_score, cost_score, reward_score = compute_score_fn(solution_str=scoring_sequences_str, ground_truth=ground_truth, format_score=strict_format_score, api_cost=api_cost, state=self.state, reward_metric=self.reward_metric, cost_coe=self.cost_coe)
+                reward_score += decompose_aux_reward(scoring_sequences_str, score_em=score_em, score_f1=score_f1)
+                metric_tensor[i, reward_token_idx] = metric_score
                 display_metric = metric_score
             else:
-                metric_score_em, metric_score_f1, cost_score, reward_score = compute_score_fn(solution_str=sequences_str, ground_truth=ground_truth, format_score=strict_format_score, api_cost=api_cost, state=self.state, reward_metric=self.reward_metric, cost_coe=self.cost_coe)
-                reward_score += decompose_aux_reward(sequences_str, score_em=score_em, score_f1=score_f1)
-                metric_em_tensor[i, valid_response_length - 1] = metric_score_em
-                metric_f1_tensor[i, valid_response_length - 1] = metric_score_f1
+                metric_score_em, metric_score_f1, cost_score, reward_score = compute_score_fn(solution_str=scoring_sequences_str, ground_truth=ground_truth, format_score=strict_format_score, api_cost=api_cost, state=self.state, reward_metric=self.reward_metric, cost_coe=self.cost_coe)
+                reward_score += decompose_aux_reward(scoring_sequences_str, score_em=score_em, score_f1=score_f1)
+                metric_em_tensor[i, reward_token_idx] = metric_score_em
+                metric_f1_tensor[i, reward_token_idx] = metric_score_f1
                 display_metric = metric_score_f1 if self.reward_metric == 'f1' else metric_score_em
 
-            reward_tensor[i, valid_response_length - 1] = reward_score
-            cost_tensor[i, valid_response_length - 1] = cost_score
-            route_tensor[i, valid_response_length - 1] = route_cnt
+            reward_tensor[i, reward_token_idx] = reward_score
+            cost_tensor[i, reward_token_idx] = cost_score
+            route_tensor[i, reward_token_idx] = route_cnt
             # all_scores.append(score)
 
             if data_source not in already_print_data_sources:
@@ -519,7 +550,8 @@ class RewardManager():
                     data_source=data_source,
                     question_text=question_text,
                     ground_truth=ground_truth,
-                    solution_str=sequences_str,
+                    raw_solution_str=sequences_str,
+                    scoring_solution_str=scoring_sequences_str,
                     extracted_answer=extracted_answer,
                     strict_format_score=strict_format_score,
                     route_cnt=route_cnt,

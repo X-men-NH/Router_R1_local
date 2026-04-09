@@ -122,7 +122,7 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         values = data.batch['values']
         responses = data.batch['responses']
         response_length = responses.size(-1)
-        attention_mask = data.batch['attention_mask']
+        attention_mask = data.batch['info_mask'] if 'info_mask' in data.batch else data.batch['attention_mask']
         response_mask = attention_mask[:, -response_length:]
         token_level_rewards = data.batch['token_level_rewards']
         advantages, returns = core_algos.compute_gae_advantage_return(token_level_rewards=token_level_rewards,
@@ -137,7 +137,7 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         index = data.non_tensor_batch['uid']
         responses = data.batch['responses']
         response_length = responses.size(-1)
-        attention_mask = data.batch['attention_mask']
+        attention_mask = data.batch['info_mask'] if 'info_mask' in data.batch else data.batch['attention_mask']
         response_mask = attention_mask[:, -response_length:]
         advantages, returns = core_algos.compute_grpo_outcome_advantage(token_level_rewards=token_level_rewards,
                                                                         eos_mask=response_mask,
@@ -157,9 +157,10 @@ def reduce_metrics(metrics: dict):
 
 def _compute_response_info(batch):
     response_length = batch.batch['responses'].shape[-1]
+    mask_source = batch.batch['info_mask'] if 'info_mask' in batch.batch else batch.batch['attention_mask']
 
     prompt_mask = batch.batch['attention_mask'][:, :-response_length]
-    response_mask = batch.batch['attention_mask'][:, -response_length:]
+    response_mask = mask_source[:, -response_length:]
 
     prompt_length = prompt_mask.sum(-1).float()
     response_length = response_mask.sum(-1).float()  # (batch_size,)
@@ -183,8 +184,9 @@ def compute_data_metrics(batch, use_critic=True):
 
     max_response_length = batch.batch['responses'].shape[-1]
 
+    mask_source = batch.batch['info_mask'] if 'info_mask' in batch.batch else batch.batch['attention_mask']
     prompt_mask = batch.batch['attention_mask'][:, :-max_response_length].bool()
-    response_mask = batch.batch['attention_mask'][:, -max_response_length:].bool()
+    response_mask = mask_source[:, -max_response_length:].bool()
 
     max_prompt_length = prompt_mask.size(-1)
 

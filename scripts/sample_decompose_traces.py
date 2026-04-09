@@ -45,6 +45,15 @@ def ensure_text(value):
     return str(value)
 
 
+def select_scoring_response(row, response_idx, raw_responses):
+    action_responses = ensure_list(row.get("action_responses"))
+    if response_idx < len(action_responses):
+        action_response = ensure_text(action_responses[response_idx])
+        if action_response:
+            return action_response
+    return ensure_text(raw_responses[response_idx])
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_parquet", required=True)
@@ -70,10 +79,11 @@ def main():
 
         for response_idx, response in enumerate(responses):
             response = ensure_text(response)
-            if "<decompose>" not in response:
+            scoring_response = select_scoring_response(row, response_idx, responses)
+            if "<decompose>" not in scoring_response:
                 continue
 
-            answer = extract_solution(response)
+            answer = extract_solution(scoring_response)
             em, f1 = compute_answer_metrics(answer, ground_truth)
             matches.append({
                 "row_idx": row_idx,
@@ -81,11 +91,12 @@ def main():
                 "data_source": data_source,
                 "prompt": prompt,
                 "response": response,
+                "scoring_response": scoring_response,
                 "answer": answer,
                 "em": em,
                 "f1": f1,
-                "search_count": response.count("<search>"),
-                "models": [m.strip() for m in SEARCH_MODEL_RE.findall(response)],
+                "search_count": scoring_response.count("<search>"),
+                "models": [m.strip() for m in SEARCH_MODEL_RE.findall(scoring_response)],
                 "ground_truth": ground_truth.get("target", []),
             })
 
@@ -116,6 +127,11 @@ def main():
         print(f"extracted_answer: {item['answer']}")
         print("PROMPT:")
         print(item["prompt"])
+        print("ACTION_RESPONSE:")
+        if args.full:
+            print(item["scoring_response"])
+        else:
+            print(item["scoring_response"][:4000])
         print("RESPONSE:")
         if args.full:
             print(item["response"])

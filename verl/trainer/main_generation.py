@@ -30,6 +30,7 @@ import pandas as pd
 from transformers import AutoTokenizer
 
 from verl import DataProto
+from verl.utils.action_trajectory import extract_action_response_text
 from verl.utils.fs import copy_local_path_from_hdfs
 from verl.workers.fsdp_workers import ActorRolloutRefWorker
 from verl.utils.hdfs_io import makedirs
@@ -70,6 +71,7 @@ def main(config):
     dp_size = wg.world_size // config.rollout.tensor_model_parallel_size
     num_batch = (total_samples // config_batch_size) + 1
     output_lst = [[] for _ in range(config.data.n_samples)]
+    action_output_lst = [[] for _ in range(config.data.n_samples)]
 
     for batch_idx in range(num_batch):
         print(f'[{batch_idx+1}/{num_batch}] Start to process.')
@@ -109,6 +111,8 @@ def main(config):
             output = output[:real_batch_size]
             output_text = tokenizer.batch_decode(output.batch['input_ids'][:, -config.rollout.response_length:],
                                                  skip_special_tokens=False)
+            response_ids = output.batch['responses']
+            response_info_mask = output.batch['info_mask'][:, -response_ids.shape[1]:]
 
             # remove the padding
             pad_token = tokenizer.pad_token
@@ -116,14 +120,28 @@ def main(config):
             for text in output_text:
                 output_text_unpad.append(text.replace(pad_token, ''))
 
+            action_text_unpad = []
+            for row_idx in range(response_ids.shape[0]):
+                action_text_unpad.append(
+                    extract_action_response_text(
+                        tokenizer,
+                        response_ids=response_ids[row_idx],
+                        response_info_mask=response_info_mask[row_idx],
+                    )
+                )
+
             output_lst[i].extend(output_text_unpad)
+            action_output_lst[i].extend(action_text_unpad)
 
     # convert output_lst from (n_samples, n_data) to (n_data, n_sampels)
     output_lst = np.array(output_lst, dtype=object)
     output_lst = np.transpose(output_lst, axes=(1, 0)).tolist()
+    action_output_lst = np.array(action_output_lst, dtype=object)
+    action_output_lst = np.transpose(action_output_lst, axes=(1, 0)).tolist()
 
     # add to the data frame
     dataset[f'responses'] = output_lst
+    dataset['action_responses'] = action_output_lst
 
     # write to a new parquet
     output_dir = os.path.dirname(config.data.output_path)

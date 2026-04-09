@@ -45,6 +45,15 @@ def ensure_text(value):
     return str(value)
 
 
+def select_scoring_response(row, response_idx, raw_responses):
+    action_responses = ensure_list(row.get("action_responses"))
+    if response_idx < len(action_responses):
+        action_response = ensure_text(action_responses[response_idx])
+        if action_response:
+            return action_response
+    return ensure_text(raw_responses[response_idx])
+
+
 def summarize_group(rows):
     def mean(key):
         vals = [row[key] for row in rows if key in row]
@@ -86,15 +95,17 @@ def main():
         data_source = row.get("data_source", "unknown")
 
         response_stats = []
-        for response in responses:
+        for response_idx, response in enumerate(responses):
             response = ensure_text(response)
-            answer = extract_solution(response)
+            scoring_response = select_scoring_response(row, response_idx, responses)
+            answer = extract_solution(scoring_response)
             em, f1 = compute_answer_metrics(answer, ground_truth)
-            has_decompose = "<decompose>" in response
-            search_count = response.count("<search>")
-            models = [m.strip() for m in SEARCH_MODEL_RE.findall(response)]
+            has_decompose = "<decompose>" in scoring_response
+            search_count = scoring_response.count("<search>")
+            models = [m.strip() for m in SEARCH_MODEL_RE.findall(scoring_response)]
             response_stats.append({
                 "response": response,
+                "scoring_response": scoring_response,
                 "answer": answer,
                 "em": em,
                 "f1": f1,

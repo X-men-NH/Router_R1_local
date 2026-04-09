@@ -775,7 +775,6 @@ class LLMGenerationManager:
 
                     if numbering_invalid:
                         route_results.pop(0)
-                        completion_tokens_list.pop(0)
                         next_obs.append(self._format_invalid_search_feedback(curr_state))
                         dones.append(0)
                         valid_action.append(0)

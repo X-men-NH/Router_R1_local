@@ -56,6 +56,23 @@ class LLMGenerationManager:
         self.skip_stalled_step = os.getenv('ROUTER_SKIP_STALLED_STEP', '1').lower() in ('1', 'true', 'yes', 'on')
         self.max_stalled_turns = int(os.getenv('ROUTER_MAX_STALLED_TURNS', '2'))
 
+    def _format_invalid_subanswer_feedback(self, state: List[Dict[str, Any]] | None) -> str:
+        state_block = self._format_decomposition_state(state)
+        if state is None:
+            reminder = (
+                'No decomposition is active. <subanswer> is only valid after <decompose> creates a '
+                '<decomposition_state> block. If this is a simple or single-hop question, provide the final '
+                'result with <answer>...</answer> instead.'
+            )
+        elif self._get_current_subq(state) is None:
+            reminder = 'All sub-questions are already DONE. Provide the final result with <answer>...</answer>.'
+        else:
+            reminder = 'Use <subanswer> only to solve the current first TODO sub-question shown in <decomposition_state>.'
+
+        if state_block:
+            return f"\n\n{state_block}\n{reminder}\n\n"
+        return f"\n\n{reminder}\n\n"
+
     def _split_route_content(self, content: str) -> Tuple[str, str]:
         if not isinstance(content, str):
             return '', ''
@@ -633,9 +650,11 @@ class LLMGenerationManager:
                     curr_state = decomposition_states[i]
                     current_subq = self._get_current_subq(curr_state)
                     subanswer_text = contents[i].strip()
-                    if current_subq is None or not subanswer_text:
-                        state_block = self._format_decomposition_state(curr_state)
-                        next_obs.append(f"\n\n{state_block}\n\n" if state_block else '')
+                    if not subanswer_text:
+                        next_obs.append(self._format_invalid_subanswer_feedback(curr_state))
+                        valid_action.append(0)
+                    elif current_subq is None:
+                        next_obs.append(self._format_invalid_subanswer_feedback(curr_state))
                         valid_action.append(0)
                     else:
                         current_subq['answer'] = subanswer_text

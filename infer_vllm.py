@@ -69,6 +69,24 @@ def format_decomposition_state(state):
     return '\n'.join(lines)
 
 
+def format_invalid_subanswer_feedback(state):
+    state_block = format_decomposition_state(state)
+    if state is None:
+        reminder = (
+            'No decomposition is active. <subanswer> is only valid after <decompose> creates a '
+            '<decomposition_state> block. If this is a simple or single-hop question, provide the final '
+            'result with <answer>...</answer> instead.'
+        )
+    elif get_current_subq(state) is None:
+        reminder = 'All sub-questions are already DONE. Provide the final result with <answer>...</answer>.'
+    else:
+        reminder = 'Use <subanswer> only to solve the current first TODO sub-question shown in <decomposition_state>.'
+
+    if state_block:
+        return f"\n{state_block}\n{reminder}\n"
+    return f"\n{reminder}\n"
+
+
 def get_current_subq(state):
     if not state:
         return None
@@ -171,11 +189,13 @@ if __name__ == '__main__':
                     all_output += curr_route_template.format(output_text=output_text, route_results=route_results)
             elif action == "subanswer":
                 current_subq = get_current_subq(decomposition_state)
-                if current_subq is not None:
+                if current_subq is not None and content:
                     current_subq["answer"] = content
                     current_subq["done"] = True
-                state_block = format_decomposition_state(decomposition_state)
-                stitched = f"\n{output_text}\n{state_block}\n"
+                    state_block = format_decomposition_state(decomposition_state)
+                    stitched = f"\n{output_text}\n{state_block}\n"
+                else:
+                    stitched = f"\n{output_text}\n{format_invalid_subanswer_feedback(decomposition_state)}"
                 prompt += stitched
                 all_output += stitched
             elif action == "decompose":

@@ -12,7 +12,7 @@ Your output MUST start with <think> and MUST end with </answer>. No exceptions. 
 1. **Reason**: Write your thinking process inside <think> ... </think>. You must do this before every other action. \
 2. **Decompose** (optional, use for multi-hop questions): Break the question into 2 or 3 sub-questions inside <decompose> ... </decompose>. You may only decompose ONCE per trajectory. \
 3. **Search**: Query an external LLM inside <search> ... </search>. The response will be returned inside <information> ... </information>. Searching only gathers evidence; it does not by itself mark a sub-question as solved. \
-4. **Subanswer**: Once you have enough evidence for the current TODO sub-question, answer only that sub-question inside <subanswer> ... </subanswer>. This is how you mark the current TODO sub-question as solved. \
+4. **Subanswer**: Once you have enough evidence for the current TODO sub-question, answer only that sub-question inside <subanswer> ... </subanswer>. This is how you mark the current TODO sub-question as solved. You may use <subanswer> only when a <decomposition_state> block is present. \
 5. **Answer**: Provide your final answer inside <answer> ... </answer>. This must be the LAST tag in your output. \
 
 ## Strict Rules \
@@ -44,6 +44,8 @@ Your output MUST start with <think> and MUST end with </answer>. No exceptions. 
     + After receiving <information>, you must first reason in <think> ... </think>, then choose the next action: either another <search>, a <subanswer> for the current TODO sub-question, or the final <answer> if all sub-questions are DONE.\
 
 !!! STRICT FORMAT RULES for <subanswer>: !!!
+    + You may use <subanswer> only after a valid <decompose> has created a <decomposition_state> block.
+    + If no <decomposition_state> block is present, do NOT use <subanswer>. For simple or single-hop questions, go from <think> or <information> directly to the final <answer>.
     + If <decomposition_state> is present, <subanswer> must answer only the current first [TODO] sub-question.
     + A single <search> does NOT mark a sub-question as solved. Use <subanswer> when you are ready to mark the current TODO sub-question as DONE.
     + Keep <subanswer> short and focused on the current sub-question, not the full original question.
@@ -59,6 +61,7 @@ Before each LLM call, you MUST explicitly reason inside <think> ... </think> abo
     + Which model is best suited for answering it, based on the LLMs' abilities (described below). \
 
 If the question is straightforward, you may still answer directly after reasoning, but avoid unnecessary extra actions. \
+If you did not decompose the problem, do not emit <subanswer>; give the final result with <answer>. \
 
 When you call an LLM, the response will be returned between <information> and </information>. \
 You must not limit yourself to repeatedly calling a single LLM (unless its provided information is consistently the most effective and informative). \

@@ -19,6 +19,7 @@ from collections import Counter
 
 F1_SHAPING_THRESHOLD = 0.4
 F1_SHAPING_MAX_BONUS = 0.2
+CORRECT_ANSWER_FORMAT_PENALTY_CAP = -0.2
 
 def normalize_answer(s):
     def remove_articles(text):
@@ -152,6 +153,14 @@ def f1_shaping_bonus(score_f1, score_em):
     return float(min(F1_SHAPING_MAX_BONUS, F1_SHAPING_MAX_BONUS * scaled))
 
 
+def cap_format_penalty_for_correct_answer(format_score, score_em):
+    if format_score >= 0.0:
+        return format_score
+    if score_em >= 1.0:
+        return max(format_score, CORRECT_ANSWER_FORMAT_PENALTY_CAP)
+    return format_score
+
+
 def compute_score_em(solution_str, ground_truth, method='strict', format_score=0., score=1., cost_coe=0.0, api_cost=0.0,
                      state="train", reward_metric="f1"):
     answer = extract_solution(solution_str=solution_str)
@@ -169,6 +178,8 @@ def compute_score_em(solution_str, ground_truth, method='strict', format_score=0
 
     score_em, score_f1 = compute_answer_metrics(answer, ground_truth)
 
+    effective_format_score = cap_format_penalty_for_correct_answer(format_score, score_em)
+
     if state == "train":
         if reward_metric == "f1":
             metric_score = score_f1
@@ -180,13 +191,10 @@ def compute_score_em(solution_str, ground_truth, method='strict', format_score=0
             metric_score = score_em
             answer_reward = score_em
 
-        if format_score == -1.0:
-            return metric_score, api_cost, format_score
-
         if answer_reward == 0:
             reward_score = answer_reward + format_score
         else:
-            reward_score = (answer_reward + format_score) * (1.0 - cost_coe) + api_cost * cost_coe
+            reward_score = (answer_reward + effective_format_score) * (1.0 - cost_coe) + api_cost * cost_coe
 
         return metric_score, api_cost, reward_score
     else:
@@ -197,13 +205,10 @@ def compute_score_em(solution_str, ground_truth, method='strict', format_score=0
         else:
             answer_reward = score_em
 
-        if format_score == -1.0:
-            return score_em, score_f1, api_cost, format_score
-
         if answer_reward == 0:
             reward_score = answer_reward + format_score
         else:
-            reward_score = (answer_reward + format_score) * (1.0 - cost_coe) + api_cost * cost_coe
+            reward_score = (answer_reward + effective_format_score) * (1.0 - cost_coe) + api_cost * cost_coe
 
         return score_em, score_f1, api_cost, reward_score
 

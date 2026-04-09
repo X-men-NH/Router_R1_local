@@ -14,6 +14,7 @@ from .route_service import access_routing_pool, check_llm_name
 ACTION_TAGS = ('decompose', 'search', 'subanswer', 'answer')
 MAX_DECOMPOSE_QUESTIONS = 3
 RESPONSE_TAGS = ('think',) + ACTION_TAGS
+SUBQ_REF_RE = re.compile(r'^\s*\[SubQ(\d+)\]\s*(.*)$', re.IGNORECASE | re.DOTALL)
 
 
 @dataclass
@@ -76,7 +77,31 @@ class LLMGenerationManager:
         elif self._get_current_subq(state) is None:
             reminder = 'All sub-questions are already DONE. Provide the final result with <answer>...</answer>.'
         else:
-            reminder = 'Use <subanswer> only to solve the current first TODO sub-question shown in <decomposition_state>.'
+            current_subq = self._get_current_subq(state)
+            reminder = (
+                f'Use <subanswer>[SubQ{current_subq["id"]}] ... </subanswer> only for the current first TODO '
+                'sub-question shown in <decomposition_state>.'
+            )
+
+        if state_block:
+            return f"\n\n{state_block}\n{reminder}\n\n"
+        return f"\n\n{reminder}\n\n"
+
+    def _format_invalid_search_feedback(self, state: Optional[List[Dict[str, Any]]]) -> str:
+        state_block = self._format_decomposition_state(state)
+        if state is None:
+            reminder = (
+                'No decomposition is active. Use <search>ModelName:query</search> for a direct search or '
+                '<answer>...</answer> if you already know the answer.'
+            )
+        elif self._get_current_subq(state) is None:
+            reminder = 'All sub-questions are already DONE. Provide the final result with <answer>...</answer>.'
+        else:
+            current_subq = self._get_current_subq(state)
+            reminder = (
+                f'Use <search>[SubQ{current_subq["id"]}] ModelName:query</search> only for the current first TODO '
+                'sub-question shown in <decomposition_state>.'
+            )
 
         if state_block:
             return f"\n\n{state_block}\n{reminder}\n\n"
@@ -89,6 +114,31 @@ class LLMGenerationManager:
         if len(parts) != 2:
             return content.strip(), ''
         return parts[0].strip(), parts[1].strip()
+
+    def _extract_subq_reference(self, content: str) -> Tuple[Optional[int], str]:
+        if not isinstance(content, str):
+            return None, ''
+
+        stripped = content.strip()
+        match = SUBQ_REF_RE.match(stripped)
+        if match is None:
+            return None, stripped
+
+        return int(match.group(1)), match.group(2).strip()
+
+    def _find_subq(self, state: Optional[List[Dict[str, Any]]], subq_id: Optional[int]):
+        if state is None or subq_id is None:
+            return None
+        return next((item for item in state if item.get('id') == subq_id), None)
+
+    def _format_decomposition_guidance(self, state: Optional[List[Dict[str, Any]]]) -> str:
+        current_subq = self._get_current_subq(state)
+        if current_subq is None:
+            return 'All sub-questions are DONE. Provide the final result with <answer>...</answer>.'
+        return (
+            f'For the current TODO, use <search>[SubQ{current_subq["id"]}] ModelName:query</search> and '
+            f'<subanswer>[SubQ{current_subq["id"]}] ... </subanswer>.'
+        )
 
     def _is_valid_llm_name(self, target_llm: str) -> bool:
         if not isinstance(target_llm, str):
@@ -178,10 +228,12 @@ class LLMGenerationManager:
             question = self._clip_for_log(question_texts[idx]) if idx < len(question_texts) else ''
 
             if action == 'search':
+                subq_id, content = self._extract_subq_reference(content)
                 route_model, route_query = self._split_route_content(content)
                 route_query = self._clip_for_log(route_query)
+                subq_prefix = f" subq={subq_id}" if subq_id is not None else ''
                 print(
-                    f"[TRACE step={step}] idx={idx} action=search model={route_model!r} "
+                    f"[TRACE step={step}] idx={idx} action=search{subq_prefix} model={route_model!r} "
                     f"query={route_query!r} done={done} question={question!r}"
                 )
             elif action == 'answer':
@@ -197,9 +249,11 @@ class LLMGenerationManager:
                     f"plan={plan_preview!r} question={question!r}"
                 )
             elif action == 'subanswer':
+                subq_id, content = self._extract_subq_reference(content)
                 subanswer_preview = self._clip_for_log(content)
+                subq_prefix = f" subq={subq_id}" if subq_id is not None else ''
                 print(
-                    f"[TRACE step={step}] idx={idx} action=subanswer done={done} "
+                    f"[TRACE step={step}] idx={idx} action=subanswer{subq_prefix} done={done} "
                     f"subanswer={subanswer_preview!r} question={question!r}"
                 )
             else:
@@ -600,7 +654,11 @@ class LLMGenerationManager:
         if decomposition_states is None:
             decomposition_states = [None for _ in range(len(cur_actions))]
         
-        route_queries = [content for action, content in zip(cur_actions, contents) if action == 'search']
+        route_queries = []
+        for action, content in zip(cur_actions, contents):
+            if action == 'search':
+                _, route_content = self._extract_subq_reference(content)
+                route_queries.append(route_content)
         if do_route:
             route_results, completion_tokens_list = self.batch_route(route_queries)
             assert len(route_results) == sum([1 for action in cur_actions if action == 'search'])
@@ -623,7 +681,11 @@ class LLMGenerationManager:
                     unfinished = curr_state and self._get_current_subq(curr_state) is not None
                     if unfinished:
                         state_block = self._format_decomposition_state(curr_state)
-                        reminder = 'Finish the current TODO sub-question with <subanswer> before giving the final answer.'
+                        current_subq = self._get_current_subq(curr_state)
+                        reminder = (
+                            f'Finish the current TODO sub-question with '
+                            f'<subanswer>[SubQ{current_subq["id"]}] ... </subanswer> before giving the final answer.'
+                        )
                         next_obs.append(f"\n\n{state_block}\n{reminder}\n\n")
                         dones.append(0)
                         valid_action.append(0)
@@ -647,7 +709,9 @@ class LLMGenerationManager:
                             }
                             for idx, question in enumerate(plan_lines)
                         ]
-                        next_obs.append(f"\n\n{self._format_decomposition_state(decomposition_states[i])}\n\n")
+                        state_block = self._format_decomposition_state(decomposition_states[i])
+                        guidance = self._format_decomposition_guidance(decomposition_states[i])
+                        next_obs.append(f"\n\n{state_block}\n{guidance}\n\n")
                         valid_action.append(1)
                     else:
                         next_obs.append('')
@@ -658,26 +722,66 @@ class LLMGenerationManager:
                 elif action == 'subanswer':
                     curr_state = decomposition_states[i]
                     current_subq = self._get_current_subq(curr_state)
-                    subanswer_text = contents[i].strip()
+                    subq_id, subanswer_text = self._extract_subq_reference(contents[i])
+                    target_subq = self._find_subq(curr_state, subq_id)
                     if not subanswer_text:
                         next_obs.append(self._format_invalid_subanswer_feedback(curr_state))
                         valid_action.append(0)
                     elif current_subq is None:
                         next_obs.append(self._format_invalid_subanswer_feedback(curr_state))
                         valid_action.append(0)
+                    elif subq_id is None or target_subq is None:
+                        next_obs.append(self._format_invalid_subanswer_feedback(curr_state))
+                        valid_action.append(0)
+                    elif target_subq.get('done'):
+                        next_obs.append(self._format_invalid_subanswer_feedback(curr_state))
+                        valid_action.append(0)
+                    elif target_subq['id'] != current_subq['id']:
+                        next_obs.append(self._format_invalid_subanswer_feedback(curr_state))
+                        valid_action.append(0)
                     else:
-                        current_subq['answer'] = subanswer_text
-                        current_subq['done'] = True
+                        target_subq['answer'] = subanswer_text
+                        target_subq['done'] = True
                         state_block = self._format_decomposition_state(curr_state)
-                        next_obs.append(f"\n\n{state_block}\n\n")
+                        guidance = self._format_decomposition_guidance(curr_state)
+                        next_obs.append(f"\n\n{state_block}\n{guidance}\n\n")
                         valid_action.append(1)
                     dones.append(0)
+                    is_route.append(0)
+                    cur_completion_tokens.append(0.0)
+                elif isinstance(action, str) and action.startswith('route invalid'):
+                    next_obs.append(self._format_invalid_search_feedback(decomposition_states[i]))
+                    dones.append(0)
+                    valid_action.append(0)
                     is_route.append(0)
                     cur_completion_tokens.append(0.0)
                 elif action == 'search':
                     curr_state = decomposition_states[i]
                     current_subq = self._get_current_subq(curr_state)
-                    if route_results[0].strip().lower() == "llm name error":
+                    subq_id, _ = self._extract_subq_reference(contents[i])
+                    target_subq = self._find_subq(curr_state, subq_id)
+                    numbered_mode = curr_state is not None
+                    numbering_invalid = False
+                    if numbered_mode:
+                        numbering_invalid = (
+                            current_subq is None or
+                            subq_id is None or
+                            target_subq is None or
+                            target_subq.get('done') or
+                            subq_id != current_subq['id']
+                        )
+                    elif subq_id is not None:
+                        numbering_invalid = True
+
+                    if numbering_invalid:
+                        route_results.pop(0)
+                        completion_tokens_list.pop(0)
+                        next_obs.append(self._format_invalid_search_feedback(curr_state))
+                        dones.append(0)
+                        valid_action.append(0)
+                        is_route.append(0)
+                        cur_completion_tokens.append(0.0)
+                    elif route_results[0].strip().lower() == "llm name error":
                         state_block = self._format_decomposition_state(curr_state)
                         state_prefix = f"{state_block}\n" if state_block else ''
                         info_block = f"<information>{'[SubQ' + str(current_subq['id']) + '] ' if current_subq else ''}None</information>"
@@ -738,14 +842,16 @@ class LLMGenerationManager:
                     action = match.group(1)
                     if action == "search" and ("llm-name" in content.strip().lower() or "your-query" in content.strip().lower()):
                         action = "route invalid-1"
-                    elif action == "search" and ":" not in content:
-                        action = "route invalid-2"
-                    elif action == "search" and content.strip().lower().split(":")[-1].strip() == "":
-                        action = "route invalid-3"
                     elif action == "search":
-                        route_model, _ = self._split_route_content(content)
-                        if not self._is_valid_llm_name(route_model):
-                            action = "route invalid-4"
+                        _, route_content = self._extract_subq_reference(content)
+                        if ":" not in route_content:
+                            action = "route invalid-2"
+                        elif route_content.strip().lower().split(":")[-1].strip() == "":
+                            action = "route invalid-3"
+                        else:
+                            route_model, _ = self._split_route_content(route_content)
+                            if not self._is_valid_llm_name(route_model):
+                                action = "route invalid-4"
                     elif action == "decompose":
                         plan_lines = [line.strip(" -1234567890.") for line in content.splitlines() if line.strip()]
                         if len(plan_lines) < 2:

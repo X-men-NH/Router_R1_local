@@ -47,6 +47,7 @@ transform = 'sqrt'
 alpha = 0.01 
 
 buffer = deque(maxlen=window_size)
+SUBQ_REF_RE = re.compile(r'^\s*\[SubQ(\d+)\]\s*(.*)$', re.IGNORECASE | re.DOTALL)
 
 
 def reward_preprocess(r: float) -> float:
@@ -136,6 +137,18 @@ def shorten_text(text, max_chars=240):
     return text[:max_chars] + '...'
 
 
+def extract_subq_reference(content):
+    if not isinstance(content, str):
+        return None, ''
+
+    stripped = content.strip()
+    match = SUBQ_REF_RE.match(stripped)
+    if match is None:
+        return None, stripped
+
+    return int(match.group(1)), match.group(2).strip()
+
+
 def summarize_actions(solution_str, max_chars=180):
     if not isinstance(solution_str, str):
         return []
@@ -145,11 +158,13 @@ def summarize_actions(solution_str, max_chars=180):
     for step_idx, (action, content) in enumerate(matches, start=1):
         content = content.strip()
         if action == 'search':
+            subq_id, content = extract_subq_reference(content)
             parts = content.split(':', 1)
             if len(parts) == 2:
                 model_name = shorten_text(parts[0].strip(), max_chars=48)
                 query_text = shorten_text(parts[1].strip(), max_chars=max_chars)
-                summary = f"{step_idx}. SEARCH model={model_name} query={query_text}"
+                subq_prefix = f" subq={subq_id}" if subq_id is not None else ''
+                summary = f"{step_idx}. SEARCH{subq_prefix} model={model_name} query={query_text}"
             else:
                 summary = f"{step_idx}. SEARCH {shorten_text(content, max_chars=max_chars)}"
         elif action == 'decompose':
@@ -160,12 +175,76 @@ def summarize_actions(solution_str, max_chars=180):
             else:
                 summary = f"{step_idx}. DECOMPOSE {shorten_text(content, max_chars=max_chars)}"
         elif action == 'subanswer':
-            summary = f"{step_idx}. SUBANSWER {shorten_text(content, max_chars=max_chars)}"
+            subq_id, content = extract_subq_reference(content)
+            subq_prefix = f" subq={subq_id}" if subq_id is not None else ''
+            summary = f"{step_idx}. SUBANSWER{subq_prefix} {shorten_text(content, max_chars=max_chars)}"
         else:
             summary = f"{step_idx}. {action.upper()} {shorten_text(content, max_chars=max_chars)}"
         summaries.append(summary)
 
     return summaries
+
+
+def analyze_decompose_protocol(completion):
+    analysis = {
+        'plan_size': 0,
+        'valid': True,
+        'unique_subanswers_total': 0,
+        'unique_subanswers_before_first_answer': 0,
+        'all_done_before_first_answer': False,
+        'early_answer': False,
+    }
+
+    tag_pattern = r'<(think|search|subanswer|answer|information|decompose)>(.*?)</\1>'
+    tag_matches = list(re.finditer(tag_pattern, completion, re.DOTALL))
+    decompose_matches = [match for match in tag_matches if match.group(1) == 'decompose']
+    if len(decompose_matches) != 1:
+        return analysis
+
+    plan_lines = parse_decomposition_items(decompose_matches[0].group(2).strip())
+    analysis['plan_size'] = len(plan_lines)
+    if len(plan_lines) < 2 or len(plan_lines) > 3:
+        analysis['valid'] = False
+        return analysis
+
+    solved_ids = set()
+    solved_before_first_answer = set()
+    first_answer_seen = False
+    decompose_seen = False
+
+    for match in tag_matches:
+        action = match.group(1)
+        content = match.group(2).strip()
+        if action == 'decompose':
+            decompose_seen = True
+            continue
+        if not decompose_seen or action in ('think', 'information'):
+            continue
+
+        expected_id = next((idx for idx in range(1, len(plan_lines) + 1) if idx not in solved_ids), None)
+        if action == 'search':
+            subq_id, route_content = extract_subq_reference(content)
+            if subq_id is None or not route_content or expected_id is None or subq_id != expected_id:
+                analysis['valid'] = False
+        elif action == 'subanswer':
+            subq_id, answer_text = extract_subq_reference(content)
+            if subq_id is None or not answer_text or expected_id is None or subq_id != expected_id or subq_id in solved_ids:
+                analysis['valid'] = False
+            else:
+                solved_ids.add(subq_id)
+                if not first_answer_seen:
+                    solved_before_first_answer.add(subq_id)
+        elif action == 'answer':
+            if expected_id is not None:
+                analysis['early_answer'] = True
+                analysis['valid'] = False
+            if not first_answer_seen:
+                first_answer_seen = True
+
+    analysis['unique_subanswers_total'] = len(solved_ids)
+    analysis['unique_subanswers_before_first_answer'] = len(solved_before_first_answer)
+    analysis['all_done_before_first_answer'] = len(solved_before_first_answer) == len(plan_lines)
+    return analysis
 
 
 def format_reward(completion):
@@ -190,10 +269,14 @@ def format_reward(completion):
     llm_name_punish = False
     think_punish = False
     decompose_plan_size = 0
+    search_has_subq_prefix = False
     for single_match in tag_enclose_matches:
         action = single_match[0].strip()
         content = single_match[1].strip()
         if action == "search":
+            subq_id, content = extract_subq_reference(content)
+            if subq_id is not None:
+                search_has_subq_prefix = True
             route_enclose_count += 1
             if content.count(":") == 1:
                 if content.split(":")[-1].strip() == '' or "llm-name" in content.strip().lower() \
@@ -244,12 +327,16 @@ def format_reward(completion):
     if decompose_enclose_count == 0 and subanswer_enclose_count > 0:
         return PUNISH_REWARD_MAX
 
+    if decompose_enclose_count == 0 and search_has_subq_prefix:
+        return PUNISH_REWARD_MAX
+
     if decompose_enclose_count == 1:
         if decompose_plan_size < 2 or decompose_plan_size > 3:
             return PUNISH_REWARD_MAX
         if subanswer_enclose_count > decompose_plan_size:
             return PUNISH_REWARD_MAX
-        if has_early_answer_with_todo(completion, decompose_plan_size):
+        protocol_analysis = analyze_decompose_protocol(completion)
+        if not protocol_analysis['valid']:
             return PUNISH_REWARD_MAX
 
     if info_enclose_count not in (0, route_enclose_count):
@@ -284,6 +371,7 @@ def route_count(completion):
         action = single_match[0].strip()
         content = single_match[1].strip()
         if action == "search":
+            _, content = extract_subq_reference(content)
             if content.count(":") == 1:
                 if content.split(":")[
                     -1].strip() == '' or "llm-name" in content.strip().lower() or "your-query" in content.strip().lower():
@@ -322,10 +410,16 @@ def has_post_decompose_progress(completion):
 
 
 def count_subanswers(completion):
+    protocol_analysis = analyze_decompose_protocol(completion)
+    if protocol_analysis['plan_size'] > 0:
+        return protocol_analysis['unique_subanswers_total']
     return len(re.findall(r'<subanswer>(.*?)</subanswer>', completion, re.DOTALL))
 
 
 def count_subanswers_before_first_answer(completion):
+    protocol_analysis = analyze_decompose_protocol(completion)
+    if protocol_analysis['plan_size'] > 0:
+        return protocol_analysis['unique_subanswers_before_first_answer']
     answer_match = re.search(r'<answer>.*?</answer>', completion, re.DOTALL)
     if answer_match is None:
         return 0
@@ -335,6 +429,9 @@ def count_subanswers_before_first_answer(completion):
 
 
 def all_subquestions_solved_before_final_answer(completion, total_subquestions):
+    protocol_analysis = analyze_decompose_protocol(completion)
+    if protocol_analysis['plan_size'] > 0:
+        return protocol_analysis['all_done_before_first_answer']
     if total_subquestions <= 0:
         return False
     if re.search(r'<answer>.*?</answer>', completion, re.DOTALL) is None:
@@ -343,6 +440,9 @@ def all_subquestions_solved_before_final_answer(completion, total_subquestions):
 
 
 def has_early_answer_with_todo(completion, total_subquestions):
+    protocol_analysis = analyze_decompose_protocol(completion)
+    if protocol_analysis['plan_size'] > 0:
+        return protocol_analysis['early_answer']
     answer_match = re.search(r'<answer>.*?</answer>', completion, re.DOTALL)
     if answer_match is None:
         return False
@@ -392,12 +492,14 @@ def decompose_aux_reward(completion, score_em=0.0, score_f1=0.0):
     if len(set(normalized_items)) != len(normalized_items):
         return 0.0
 
+    protocol_analysis = analyze_decompose_protocol(completion)
+
     bonus = DECOMPOSE_STRUCTURE_BONUS
 
-    solved_subqs = min(len(plan_lines), count_subanswers(completion))
+    solved_subqs = min(len(plan_lines), protocol_analysis['unique_subanswers_total'])
     bonus += solved_subqs * DECOMPOSE_SUBANSWER_BONUS
 
-    if all_subquestions_solved_before_final_answer(completion, len(plan_lines)):
+    if protocol_analysis['all_done_before_first_answer']:
         bonus += DECOMPOSE_ALL_DONE_BONUS
 
     bounded_f1 = float(np.clip(score_f1, 0.0, 1.0))
@@ -405,7 +507,7 @@ def decompose_aux_reward(completion, score_em=0.0, score_f1=0.0):
     if utility_anchor > 0.5:
         bonus += DECOMPOSE_UTILITY_MAX_BONUS * ((utility_anchor - 0.5) / 0.5)
 
-    if has_early_answer_with_todo(completion, len(plan_lines)):
+    if protocol_analysis['early_answer']:
         bonus -= DECOMPOSE_EARLY_ANSWER_PENALTY
 
     if is_unknown_final_answer(completion) and utility_anchor <= 0.0:

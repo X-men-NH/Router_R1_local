@@ -173,6 +173,8 @@ def format_reward(completion):
     tag_enclose_matches = re.findall(tag_enclose_pattern, completion, re.DOTALL)
     if len(tag_enclose_matches) == 0:
         return PUNISH_REWARD_MAX
+
+    tag_span_matches = list(re.finditer(tag_enclose_pattern, completion, re.DOTALL))
     
     if completion.count("<search>") != completion.count("</search>") or completion.count("<think>") != completion.count("</think>") or completion.count("<answer>") != completion.count("</answer>") or completion.count("<information>") != completion.count("</information>") or completion.count("<decompose>") != completion.count("</decompose>") or completion.count("<subanswer>") != completion.count("</subanswer>"):
         return PUNISH_REWARD_MAX
@@ -182,10 +184,12 @@ def format_reward(completion):
     think_enclose_count = 0
     info_enclose_count = 0
     decompose_enclose_count = 0
+    subanswer_enclose_count = 0
     is_nesting = False
     query_format_punish = False
     llm_name_punish = False
     think_punish = False
+    decompose_plan_size = 0
     for single_match in tag_enclose_matches:
         action = single_match[0].strip()
         content = single_match[1].strip()
@@ -207,8 +211,9 @@ def format_reward(completion):
                 think_punish = True
         elif action == "decompose":
             decompose_enclose_count += 1
+            decompose_plan_size = len(parse_decomposition_items(content))
         elif action == "subanswer":
-            pass
+            subanswer_enclose_count += 1
         else:
             info_enclose_count += 1
         
@@ -221,9 +226,31 @@ def format_reward(completion):
 
     if is_nesting:
         return PUNISH_REWARD_MAX
+
+    prev_end = 0
+    for match in tag_span_matches:
+        if completion[prev_end:match.start()].strip():
+            return PUNISH_REWARD_MAX
+        prev_end = match.end()
+    if completion[prev_end:].strip():
+        return PUNISH_REWARD_MAX
         
     if answer_enclose_count != 1 or think_enclose_count == 0:
         return PUNISH_REWARD_MAX
+
+    if decompose_enclose_count > 1:
+        return PUNISH_REWARD_MAX
+
+    if decompose_enclose_count == 0 and subanswer_enclose_count > 0:
+        return PUNISH_REWARD_MAX
+
+    if decompose_enclose_count == 1:
+        if decompose_plan_size < 2 or decompose_plan_size > 3:
+            return PUNISH_REWARD_MAX
+        if subanswer_enclose_count > decompose_plan_size:
+            return PUNISH_REWARD_MAX
+        if has_early_answer_with_todo(completion, decompose_plan_size):
+            return PUNISH_REWARD_MAX
 
     if info_enclose_count not in (0, route_enclose_count):
         return PUNISH_REWARD_MAX

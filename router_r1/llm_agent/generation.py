@@ -8,11 +8,12 @@ from .tensor_helper import TensorHelper, TensorConfig
 from verl import DataProto
 from verl.utils.tracking import Tracking
 import shutil
-from .route_service import access_routing_pool
+from .route_service import access_routing_pool, check_llm_name
 
 
 ACTION_TAGS = ('decompose', 'search', 'subanswer', 'answer')
 MAX_DECOMPOSE_QUESTIONS = 3
+RESPONSE_TAGS = ('think',) + ACTION_TAGS
 
 
 @dataclass
@@ -88,6 +89,12 @@ class LLMGenerationManager:
         if len(parts) != 2:
             return content.strip(), ''
         return parts[0].strip(), parts[1].strip()
+
+    def _is_valid_llm_name(self, target_llm: str) -> bool:
+        if not isinstance(target_llm, str):
+            return False
+        llm_name, _ = check_llm_name(target_llm=target_llm.strip().lower())
+        return llm_name != ''
 
     def _parse_decomposition_items(self, content: str) -> List[str]:
         if not isinstance(content, str):
@@ -232,6 +239,14 @@ class LLMGenerationManager:
 
         processed_responses = []
         for resp in responses_str:
+            first_structured_match = re.search(
+                r'<(' + '|'.join(RESPONSE_TAGS) + r')>(.*?)</\1>',
+                resp,
+                re.DOTALL,
+            )
+            if first_structured_match is not None:
+                resp = resp[first_structured_match.start():]
+
             close_positions = []
             for tag in ACTION_TAGS:
                 close_tag = f'</{tag}>'
@@ -727,6 +742,10 @@ class LLMGenerationManager:
                         action = "route invalid-2"
                     elif action == "search" and content.strip().lower().split(":")[-1].strip() == "":
                         action = "route invalid-3"
+                    elif action == "search":
+                        route_model, _ = self._split_route_content(content)
+                        if not self._is_valid_llm_name(route_model):
+                            action = "route invalid-4"
                     elif action == "decompose":
                         plan_lines = [line.strip(" -1234567890.") for line in content.splitlines() if line.strip()]
                         if len(plan_lines) < 2:

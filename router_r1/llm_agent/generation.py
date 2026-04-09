@@ -2,7 +2,7 @@ import torch
 import re
 from collections import defaultdict
 import os
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from dataclasses import dataclass
 from .tensor_helper import TensorHelper, TensorConfig
 from verl import DataProto
@@ -64,7 +64,7 @@ class LLMGenerationManager:
             return text
         return text[:self.log_max_chars] + '...'
 
-    def _format_invalid_subanswer_feedback(self, state: List[Dict[str, Any]] | None) -> str:
+    def _format_invalid_subanswer_feedback(self, state: Optional[List[Dict[str, Any]]]) -> str:
         state_block = self._format_decomposition_state(state)
         if state is None:
             reminder = (

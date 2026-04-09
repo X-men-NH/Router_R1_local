@@ -124,6 +124,8 @@ def shorten_text(text, max_chars=240):
     if not isinstance(text, str):
         text = str(text)
     text = text.replace('\n', ' ').strip()
+    if max_chars is None or max_chars <= 0:
+        return text
     if len(text) <= max_chars:
         return text
     return text[:max_chars] + '...'

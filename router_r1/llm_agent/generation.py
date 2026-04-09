@@ -56,6 +56,14 @@ class LLMGenerationManager:
         self.skip_stalled_step = os.getenv('ROUTER_SKIP_STALLED_STEP', '1').lower() in ('1', 'true', 'yes', 'on')
         self.max_stalled_turns = int(os.getenv('ROUTER_MAX_STALLED_TURNS', '2'))
 
+    def _clip_for_log(self, text: str) -> str:
+        if not isinstance(text, str):
+            text = str(text)
+        text = text.replace('\n', ' ').strip()
+        if self.log_max_chars <= 0 or len(text) <= self.log_max_chars:
+            return text
+        return text[:self.log_max_chars] + '...'
+
     def _format_invalid_subanswer_feedback(self, state: List[Dict[str, Any]] | None) -> str:
         state_block = self._format_decomposition_state(state)
         if state is None:
@@ -101,9 +109,7 @@ class LLMGenerationManager:
             status = 'DONE' if item.get('done') else 'TODO'
             line = f"[SubQ{item['id']}][{status}] {item['question']}"
             if item.get('done') and item.get('answer'):
-                answer = str(item['answer']).replace('\n', ' ').strip()
-                if len(answer) > self.log_max_chars:
-                    answer = answer[:self.log_max_chars] + '...'
+                answer = self._clip_for_log(item['answer'])
                 line += f" => {answer}"
             lines.append(line)
         lines.append('</decomposition_state>')
@@ -162,39 +168,29 @@ class LLMGenerationManager:
             action = cur_actions[idx] if idx < len(cur_actions) else None
             content = contents[idx] if idx < len(contents) else ''
             done = int(dones[idx]) if idx < len(dones) else -1
-            question = question_texts[idx].replace('\n', ' ').strip() if idx < len(question_texts) else ''
-            if len(question) > self.log_max_chars:
-                question = question[:self.log_max_chars] + '...'
+            question = self._clip_for_log(question_texts[idx]) if idx < len(question_texts) else ''
 
             if action == 'search':
                 route_model, route_query = self._split_route_content(content)
-                if len(route_query) > self.log_max_chars:
-                    route_query = route_query[:self.log_max_chars] + '...'
+                route_query = self._clip_for_log(route_query)
                 print(
                     f"[TRACE step={step}] idx={idx} action=search model={route_model!r} "
                     f"query={route_query!r} done={done} question={question!r}"
                 )
             elif action == 'answer':
-                answer_preview = content if isinstance(content, str) else ''
-                if len(answer_preview) > self.log_max_chars:
-                    answer_preview = answer_preview[:self.log_max_chars] + '...'
+                answer_preview = self._clip_for_log(content)
                 print(
                     f"[TRACE step={step}] idx={idx} action=answer done={done} "
                     f"answer={answer_preview!r} question={question!r}"
                 )
             elif action == 'decompose':
-                plan_preview = content if isinstance(content, str) else ''
-                plan_preview = plan_preview.replace('\n', ' | ').strip()
-                if len(plan_preview) > self.log_max_chars:
-                    plan_preview = plan_preview[:self.log_max_chars] + '...'
+                plan_preview = self._clip_for_log(content).replace('\n', ' | ').strip()
                 print(
                     f"[TRACE step={step}] idx={idx} action=decompose done={done} "
                     f"plan={plan_preview!r} question={question!r}"
                 )
             elif action == 'subanswer':
-                subanswer_preview = content if isinstance(content, str) else ''
-                if len(subanswer_preview) > self.log_max_chars:
-                    subanswer_preview = subanswer_preview[:self.log_max_chars] + '...'
+                subanswer_preview = self._clip_for_log(content)
                 print(
                     f"[TRACE step={step}] idx={idx} action=subanswer done={done} "
                     f"subanswer={subanswer_preview!r} question={question!r}"
@@ -215,9 +211,7 @@ class LLMGenerationManager:
         sample_indices = active_indices[:self.log_max_questions]
         print(f"[STEP {step}] active_questions={len(active_indices)}, sample={len(sample_indices)}")
         for local_idx, q_idx in enumerate(sample_indices):
-            question = question_texts[q_idx].replace('\n', ' ').strip()
-            if len(question) > self.log_max_chars:
-                question = question[:self.log_max_chars] + '...'
+            question = self._clip_for_log(question_texts[q_idx])
             print(f"[STEP {step}] q{local_idx}: {question}")
 
     def _batch_tokenize(self, responses: List[str]) -> torch.Tensor:

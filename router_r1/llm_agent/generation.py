@@ -760,6 +760,7 @@ class LLMGenerationManager:
                     current_subq = self._get_current_subq(curr_state)
                     subq_id, _ = self._extract_subq_reference(contents[i])
                     target_subq = self._find_subq(curr_state, subq_id)
+                    route_success = 0
                     numbered_mode = curr_state is not None
                     numbering_invalid = False
                     if numbered_mode:
@@ -776,10 +777,7 @@ class LLMGenerationManager:
                     if numbering_invalid:
                         route_results.pop(0)
                         next_obs.append(self._format_invalid_search_feedback(curr_state))
-                        dones.append(0)
                         valid_action.append(0)
-                        is_route.append(0)
-                        cur_completion_tokens.append(0.0)
                     elif route_results[0].strip().lower() == "llm name error":
                         state_block = self._format_decomposition_state(curr_state)
                         state_prefix = f"{state_block}\n" if state_block else ''
@@ -804,8 +802,9 @@ class LLMGenerationManager:
                         state_prefix = f"{state_block}\n" if state_block else ''
                         next_obs.append(f"\n\n{state_prefix}<information>{routed_info}</information>\n\n")
                         valid_action.append(1)
+                        route_success = 1
                     dones.append(0)
-                    is_route.append(1)
+                    is_route.append(route_success)
                     cur_completion_tokens.append(completion_tokens_list.pop(0))
                 else:
                     next_obs.append('')

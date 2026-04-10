@@ -6,11 +6,12 @@ from vllm import LLM, SamplingParams
 from transformers import AutoTokenizer
 
 from data_process import prompt_pool
-from router_r1.llm_agent.route_service import access_routing_pool
+from router_r1.llm_agent.route_service import access_routing_pool, check_llm_name
 
 
 ACTION_TAGS = ("decompose", "search", "subanswer", "answer")
 MAX_DECOMPOSE_QUESTIONS = 3
+SUBQ_REF_RE = re.compile(r'^\s*\[SubQ(\d+)\]\s*(.*)$', re.IGNORECASE | re.DOTALL)
 
 
 def parse_action(text):
@@ -80,7 +81,32 @@ def format_invalid_subanswer_feedback(state):
     elif get_current_subq(state) is None:
         reminder = 'All sub-questions are already DONE. Provide the final result with <answer>...</answer>.'
     else:
-        reminder = 'Use <subanswer> only to solve the current first TODO sub-question shown in <decomposition_state>.'
+        current_subq = get_current_subq(state)
+        reminder = (
+            f'Use <subanswer>[SubQ{current_subq["id"]}] ... </subanswer> only for the current first TODO '
+            'sub-question shown in <decomposition_state>.'
+        )
+
+    if state_block:
+        return f"\n{state_block}\n{reminder}\n"
+    return f"\n{reminder}\n"
+
+
+def format_invalid_search_feedback(state):
+    state_block = format_decomposition_state(state)
+    if state is None:
+        reminder = (
+            'No decomposition is active. Use <search>ModelName:query</search> for a direct search or '
+            '<answer>...</answer> if you already know the answer.'
+        )
+    elif get_current_subq(state) is None:
+        reminder = 'All sub-questions are already DONE. Provide the final result with <answer>...</answer>.'
+    else:
+        current_subq = get_current_subq(state)
+        reminder = (
+            f'Use <search>[SubQ{current_subq["id"]}] ModelName:query</search> only for the current first TODO '
+            'sub-question shown in <decomposition_state>.'
+        )
 
     if state_block:
         return f"\n{state_block}\n{reminder}\n"
@@ -91,6 +117,50 @@ def get_current_subq(state):
     if not state:
         return None
     return next((item for item in state if not item.get('done')), None)
+
+
+def extract_subq_reference(content):
+    if not isinstance(content, str):
+        return None, ''
+
+    stripped = content.strip()
+    match = SUBQ_REF_RE.match(stripped)
+    if match is None:
+        return None, stripped
+
+    return int(match.group(1)), match.group(2).strip()
+
+
+def find_subq(state, subq_id):
+    if state is None or subq_id is None:
+        return None
+    return next((item for item in state if item.get('id') == subq_id), None)
+
+
+def split_route_content(content):
+    if not isinstance(content, str):
+        return '', ''
+    parts = content.split(':', 1)
+    if len(parts) != 2:
+        return content.strip(), ''
+    return parts[0].strip(), parts[1].strip()
+
+
+def is_valid_llm_name(target_llm):
+    if not isinstance(target_llm, str):
+        return False
+    llm_name, _ = check_llm_name(target_llm=target_llm.strip().lower())
+    return llm_name != ''
+
+
+def format_decomposition_guidance(state):
+    current_subq = get_current_subq(state)
+    if current_subq is None:
+        return 'All sub-questions are DONE. Provide the final result with <answer>...</answer>.'
+    return (
+        f'For the current TODO, use <search>[SubQ{current_subq["id"]}] ModelName:query</search> and '
+        f'<subanswer>[SubQ{current_subq["id"]}] ... </subanswer>.'
+    )
 
 
 def route(query, api_base, api_key):
@@ -160,21 +230,47 @@ if __name__ == '__main__':
 
         print(f"[Generation {cnt}] Output:\n{output_text}")
 
+        route_results = ''
+        route_blocked = False
         if action == "search" and content:
-            route_results = route(content, api_base=api_base, api_key=api_key)
-        else:
-            route_results = ''
+            subq_id, route_content = extract_subq_reference(content)
+            current_subq = get_current_subq(decomposition_state)
+            target_subq = find_subq(decomposition_state, subq_id)
+            if decomposition_state is not None:
+                numbering_invalid = (
+                    current_subq is None or
+                    subq_id is None or
+                    target_subq is None or
+                    target_subq.get('done') or
+                    subq_id != current_subq['id']
+                )
+                if numbering_invalid:
+                    route_blocked = True
+                else:
+                    route_results = route(route_content, api_base=api_base, api_key=api_key)
+            elif subq_id is not None:
+                route_blocked = True
+            else:
+                route_model, route_query = split_route_content(route_content)
+                if not route_query or not is_valid_llm_name(route_model):
+                    route_blocked = True
+                else:
+                    route_results = route(route_content, api_base=api_base, api_key=api_key)
 
         if not STOP:
             if action == "answer" and current_subq is not None:
                 stitched = (
                     f"\n{output_text}\n{format_decomposition_state(decomposition_state)}\n"
-                    "Finish the current TODO sub-question with <subanswer> before giving the final answer.\n"
+                    f"Finish the current TODO sub-question with <subanswer>[SubQ{current_subq['id']}] ... </subanswer> before giving the final answer.\n"
                 )
                 prompt += stitched
                 all_output += stitched
             if action == "search":
-                if decomposition_state:
+                if route_blocked:
+                    stitched = f"\n{output_text}\n{format_invalid_search_feedback(decomposition_state)}"
+                    prompt += stitched
+                    all_output += stitched
+                elif decomposition_state:
                     current_subq = get_current_subq(decomposition_state)
                     if current_subq is not None:
                         current_subq['attempts'] = current_subq.get('attempts', 0) + 1
@@ -189,11 +285,14 @@ if __name__ == '__main__':
                     all_output += curr_route_template.format(output_text=output_text, route_results=route_results)
             elif action == "subanswer":
                 current_subq = get_current_subq(decomposition_state)
-                if current_subq is not None and content:
-                    current_subq["answer"] = content
-                    current_subq["done"] = True
+                subq_id, subanswer_text = extract_subq_reference(content)
+                target_subq = find_subq(decomposition_state, subq_id)
+                if current_subq is not None and subanswer_text and target_subq is not None and not target_subq.get('done') and target_subq['id'] == current_subq['id']:
+                    target_subq["answer"] = subanswer_text
+                    target_subq["done"] = True
                     state_block = format_decomposition_state(decomposition_state)
-                    stitched = f"\n{output_text}\n{state_block}\n"
+                    guidance = format_decomposition_guidance(decomposition_state)
+                    stitched = f"\n{output_text}\n{state_block}\n{guidance}\n"
                 else:
                     stitched = f"\n{output_text}\n{format_invalid_subanswer_feedback(decomposition_state)}"
                 prompt += stitched
@@ -205,7 +304,8 @@ if __name__ == '__main__':
                     for idx, question_text in enumerate(plan_lines)
                 ] if len(plan_lines) >= 2 else None
                 state_block = format_decomposition_state(decomposition_state)
-                stitched = f"\n{output_text}\n{state_block}\n" if state_block else curr_non_route_template.format(output_text=output_text)
+                guidance = format_decomposition_guidance(decomposition_state) if state_block else ''
+                stitched = f"\n{output_text}\n{state_block}\n{guidance}\n" if state_block else curr_non_route_template.format(output_text=output_text)
                 prompt += stitched
                 all_output += stitched
             else:

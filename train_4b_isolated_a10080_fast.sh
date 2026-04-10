@@ -189,7 +189,7 @@ RAY_memory_usage_threshold=0.99 PYTHONUNBUFFERED=1 NCCL_P2P_DISABLE=1 NCCL_IB_DI
     +actor_rollout_ref.model.trust_remote_code=True \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.enable_gradient_checkpointing=true \
-    actor_rollout_ref.model.use_remove_padding=True \
+    actor_rollout_ref.model.use_remove_padding=False \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
     actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.0 \
     actor_rollout_ref.actor.ppo_mini_batch_size=$ACTOR_PPO_MINI_BATCH_SIZE \
@@ -207,7 +207,7 @@ RAY_memory_usage_threshold=0.99 PYTHONUNBUFFERED=1 NCCL_P2P_DISABLE=1 NCCL_IB_DI
     actor_rollout_ref.rollout.temperature=1 \
     actor_rollout_ref.actor.state_masking=true \
     critic.optim.lr=1e-5 \
-    critic.model.use_remove_padding=True \
+    critic.model.use_remove_padding=False \
     critic.optim.lr_warmup_steps_ratio=0.0 \
     critic.model.path=$CRITIC_CKPT \
     +critic.model.trust_remote_code=True \

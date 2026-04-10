@@ -87,6 +87,36 @@ class FSDPVLLMShardingManager(BaseShardingManager):
                         )
                         handle._training_state = HandleTrainingState.IDLE
 
+    @staticmethod
+    def _clear_fsdp_unshard_context(module):
+        """Best-effort cleanup for stale FSDP unshard contexts.
+
+        Some multi-turn generation failures leave `_unshard_params_ctx` populated,
+        which makes the next `state_dict()` assert even after handles are reset to
+        IDLE. We clear these stale entries before retrying.
+        """
+        cleared = False
+        for m in module.modules():
+            if not isinstance(m, FSDP):
+                continue
+
+            for owner in (m, getattr(m, '_fsdp_state', None)):
+                if owner is None:
+                    continue
+                ctx = getattr(owner, '_unshard_params_ctx', None)
+                if isinstance(ctx, dict):
+                    for key in list(ctx.keys()):
+                        ctx[key] = None
+                    cleared = True
+
+        if cleared:
+            logger.warning("Cleared stale FSDP _unshard_params_ctx entries before retrying state_dict().")
+
+    @classmethod
+    def _recover_fsdp_state_for_state_dict(cls, module):
+        cls._reset_fsdp_handles_to_idle(module)
+        cls._clear_fsdp_unshard_context(module)
+
     def __enter__(self):
         log_gpu_memory_usage('Before state_dict() in sharding manager memory', logger=logger)
         # Switch to eval mode before extracting state_dict.
@@ -97,19 +127,27 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         # hits the FORWARD-state assertion, we fall back to resetting handles
         # via the private API (best-effort).
         self.module.eval()
-        try:
-            params = self.module.state_dict()
-        except AssertionError as e:
-            if "HandleTrainingState.FORWARD" in str(e):
-                logger.warning(
-                    "FSDP handle stuck in FORWARD state – resetting to IDLE "
-                    "and retrying state_dict(). This is expected during "
-                    "multi-turn generation."
-                )
-                self._reset_fsdp_handles_to_idle(self.module)
+        params = None
+        recovery_attempts = 0
+        while True:
+            try:
                 params = self.module.state_dict()
-            else:
-                raise
+                break
+            except AssertionError as e:
+                error_text = str(e)
+                recoverable = (
+                    "HandleTrainingState.FORWARD" in error_text or
+                    "_unshard_params_ctx[module] is not None" in error_text
+                )
+                if not recoverable or recovery_attempts >= 2:
+                    raise
+
+                recovery_attempts += 1
+                logger.warning(
+                    "FSDP state_dict() hit a recoverable multi-turn generation assertion; "
+                    f"attempting recovery {recovery_attempts}/2. Error: {error_text}"
+                )
+                self._recover_fsdp_state_for_state_dict(self.module)
         log_gpu_memory_usage('After state_dict() in sharding manager memory', logger=logger)
         # Copy, not share memory
         load_format = 'hf' if self.full_params else 'dtensor'

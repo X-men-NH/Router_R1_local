@@ -183,6 +183,7 @@ RAY_memory_usage_threshold=0.99 PYTHONUNBUFFERED=1 NCCL_P2P_DISABLE=1 NCCL_IB_DI
     data.shuffle_train_dataloader=True \
     algorithm.adv_estimator=gae \
     actor_rollout_ref.model.path=$ACTOR_CKPT \
+    actor_rollout_ref.model.trust_remote_code=True \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.enable_gradient_checkpointing=true \
     actor_rollout_ref.model.use_remove_padding=True \
@@ -206,6 +207,7 @@ RAY_memory_usage_threshold=0.99 PYTHONUNBUFFERED=1 NCCL_P2P_DISABLE=1 NCCL_IB_DI
     critic.model.use_remove_padding=True \
     critic.optim.lr_warmup_steps_ratio=0.0 \
     critic.model.path=$CRITIC_CKPT \
+    critic.model.trust_remote_code=True \
     critic.model.enable_gradient_checkpointing=true \
     critic.ppo_micro_batch_size=$CRITIC_PPO_MICRO_BATCH_SIZE \
     critic.model.fsdp_config.param_offload=true \

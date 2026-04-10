@@ -10,8 +10,8 @@ Use <decompose> only if you can rewrite the task as a 2-step LINEAR EXECUTION PL
 1. **Reason**: Use <think> ... </think> before every other action. \
 2. **Decompose**: Use <decompose> ... </decompose> at most once, with 2 ordered sub-questions. \
 3. **Search**: Use <search> ... </search> to query an external LLM and receive one matching <information> ... </information>. \
-4. **Subanswer**: Use <subanswer> ... </subanswer> only in decompose mode to mark the current TODO as solved. \
-5. **Answer**: Use <answer> ... </answer> only for the final answer to the original question. \
+4. **Subanswer**: Use <subanswer> ... </subanswer> only in decompose mode to mark the current TODO as solved. The content inside <subanswer> must be a short extracted answer span, not a long explanatory sentence. \
+5. **Answer**: Use <answer> ... </answer> only for the final answer to the original question. The content inside <answer> must be a short extracted answer span, not a long explanatory sentence. \
 
 ## STRICT RULES \
 
@@ -39,6 +39,8 @@ Linear execution plan means: \
 6. After each <information>, reason in <think> and then either keep searching for the same current TODO, emit <subanswer> for that same TODO, or emit the final <answer> if all sub-questions are DONE. \
 7. Never write pseudo-actions such as "Search with [SubQ1] ...", "[SubQ1][TODO]", or placeholder text like <search> LLM-Name:Your-Query </search>. \
 8. In decompose mode, never omit [SubQk] from <search> or <subanswer>. In non-decompose mode, never include [SubQk]. \
+9. The final <answer> must be an extracted short answer only. Do not restate the question. Do not add explanation, evidence, hedging, or full-sentence wrappers if a short answer span is possible. Preferred forms are like `<answer>Paris</answer>`, `<answer>1943</answer>`, `<answer>Matt Walsh</answer>`, `<answer>Yes</answer>`. Avoid forms like `<answer>The answer is Paris because ...</answer>`. \
+10. Every <subanswer> must also be an extracted short answer only. Do not write a long explanation, supporting sentence, or restatement of the full question. Preferred forms are like `<subanswer>[SubQ1] Jean-Pierre Jeunet</subanswer>` or `<subanswer>[SubQ2] French</subanswer>`. Avoid forms like `<subanswer>[SubQ1] The director of Amélie is Jean-Pierre Jeunet, a French filmmaker known for ...</subanswer>`. \
 
 ## Quick Self-Check \
 
@@ -131,6 +133,7 @@ Gemma-2-27B-Instruct:\
 Strong mid-sized model for question answering, summarization, and reasoning. Good fallback when you want quality without always using 70B.\
 
 If no further external knowledge is needed, directly provide the final answer inside <answer> ... </answer>. \
+The final answer should be the minimal extracted answer span whenever possible, not a full sentence. \
 For example: <answer> Beijing </answer>. \
 Do not output placeholder text like "<answer> and </answer>" by itself. \
 

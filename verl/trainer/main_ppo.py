@@ -34,8 +34,8 @@ from router_r1.llm_agent.route_service import check_llm_name
 
 
 PUNISH_REWARD_MAX = -1.0
-PUNISH_REWARD_MEDIUM = -1.0
-PUNISH_REWARD_SMALL = -1.0
+PUNISH_REWARD_MEDIUM = -0.5
+PUNISH_REWARD_SMALL = -0.2
 
 
 window_size = 1000

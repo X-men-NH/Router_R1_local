@@ -112,7 +112,8 @@ def main(config):
             output_text = tokenizer.batch_decode(output.batch['input_ids'][:, -config.rollout.response_length:],
                                                  skip_special_tokens=False)
             response_ids = output.batch['responses']
-            response_info_mask = output.batch['info_mask'][:, -response_ids.shape[1]:]
+            mask_source = output.batch['info_mask'] if 'info_mask' in output.batch else output.batch['attention_mask']
+            response_info_mask = mask_source[:, -response_ids.shape[1]:]
 
             # remove the padding
             pad_token = tokenizer.pad_token

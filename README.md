@@ -1,209 +1,232 @@
-# Router-R1
+﻿# Router-R1 Local
 
+`Router-R1-local` is a local research project for decomposition-aware multi-hop LLM routing. It trains and evaluates a 3B router that can break a question into subquestions, route each step to external LLMs through OpenRouter, aggregate the intermediate evidence, and produce a final answer.
 
-Official implementation of NeurIPS'25 Poster: Router-R1: Teaching LLMs Multi-Round Routing and Aggregation via Reinforcement Learning
+This README describes this local project only. It does not use the upstream `train.sh` / `test.sh` workflow.
 
+## What This Project Adds
 
-<p align="center">
-    <a href="https://ulab-uiuc.github.io/Router-R1">
-        <img alt="Build" src="https://img.shields.io/badge/Project-Page-blue">
-    </a>
-    <a href="https://arxiv.org/abs/2506.09033">
-        <img alt="Build" src="https://img.shields.io/badge/arXiv-2506.09033-red?logo=arxiv">
-    </a>
-    <a href="https://huggingface.co/collections/ulab-ai/router-r1-6851bbe099c7a56914b5db03">
-        <img alt="HuggingFace" src="https://img.shields.io/badge/%F0%9F%A4%97-Router--R1-yellow">
-    </a>
-    <a href="https://x.com/haozhen_ntu/status/1933897400302948843">
-        <img alt="Build" src="https://img.shields.io/badge/Twitter-black?logo=X">
-    </a>
-    <a href="https://github.com/ulab-uiuc/Router-R1/blob/master/LICENSE">
-        <img alt="License" src="https://img.shields.io/badge/LICENSE-Apache-green">
-    </a>
-    <br>
-    <a href="https://github.com/ulab-uiuc/Router-R1">
-        <img alt="Build" src="https://img.shields.io/github/stars/ulab-uiuc/Router-R1">
-    </a>
-    <a href="https://github.com/ulab-uiuc/Router-R1">
-        <img alt="Build" src="https://img.shields.io/github/forks/ulab-uiuc/Router-R1">
-    </a>
-    <a href="https://github.com/ulab-uiuc/Router-R1">
-        <img alt="Build" src="https://img.shields.io/github/issues/ulab-uiuc/Router-R1">
-    </a>
-</p>
+- **Decomposition-aware actions**: the rollout loop supports `<decompose>`, `<subanswer>`, `<search>`, and `<answer>` actions.
+- **Action-only scoring**: training and evaluation can score the action trace through `action_responses` instead of unrelated generated text.
+- **Hybrid reward**: the default training reward uses EM as the main metric and adds a capped F1 shaping bonus for partially correct answers.
+- **Local 3B training workflow**: the main launcher is `train_3b_isolated_a10080_fast.sh`.
+- **Checkpoint evaluation and trace analysis**: scripts are provided for validation-style evaluation, generation-based multihop evaluation, and decomposition trace inspection.
 
+## Repository Map
 
-<p align="center">
-    <a href="https://ulab-uiuc.github.io/Router-R1/">🌐 Project Page</a> |
-    <a href="https://arxiv.org/abs/2506.09033">📜 arXiv</a> |
-    <a href="https://huggingface.co/collections/ulab-ai/router-r1-6851bbe099c7a56914b5db03">🤗 Models & Datasets</a> |
-    <a href="https://x.com/haozhen_ntu/status/1933897400302948843">📮 Twitter Post</a>
-<p>
+- `train_3b_isolated_a10080_fast.sh`: main 3B PPO training launcher.
+- `router_r1/llm_agent/generation.py`: multi-turn routing loop and decomposition action handling.
+- `verl/utils/reward_score/qa_em.py`: EM/F1/hybrid answer reward logic.
+- `verl/utils/action_trajectory.py`: helpers for extracting action responses.
+- `verl/trainer/main_ppo.py`: PPO entrypoint with local reward wiring.
+- `verl/trainer/main_generation.py`: generation entrypoint that writes `responses` and `action_responses`.
+- `scripts/eval_official_checkpoint.sh`: validation-style checkpoint eval.
+- `scripts/eval_multihop_checkpoint.sh`: generation plus QA scoring on multihop datasets.
+- `scripts/evaluate_qa_generation.py`: aggregate EM/F1, decomposition rate, search count, and model usage from generated parquet files.
+- `scripts/sample_decompose_traces.py`: print sampled decomposition traces.
+- `docs/reward_design.md`: detailed notes on the current reward design.
+- `NEW_INSTANCE_QUICKSTART.md`: AutoDL restore and shared-config notes.
 
+## Environment Setup
 
-
-<div align="center">
-  <img src="./figures/model.png" width="700" alt="GoR">
-</div>
-
-
-
-## News
-
-
-**[2025.12]** 🚀 We open-sourced **[LLMRouter](https://github.com/ulab-uiuc/LLMRouter)**, a unified and extensible framework for training and evaluating **single-round / multi-round / agentic / personalized LLM routers**. LLMRouter aims to reduce duplicated engineering effort and enable fair comparison across different routing methods. We warmly welcome the community to integrate and benchmark their own routers!
-
-
-**[2025.09]** 🎉 **Router-R1 was accepted by NeurIPS'25!**
-
-
-
-**[2025.06]** 📢 We’ve open-sourced the **Router-R1 model weights** along with the **dataset collected for training LLM routers** on Hugging Face: [Router-R1 Collection](https://huggingface.co/collections/ulab-ai/router-r1-6851bbe099c7a56914b5db03). We hope this release will support and accelerate research on LLM routers within the community. For more updates, check out our latest [Twitter post](https://x.com/haozhen_ntu/status/1933897400302948843). Also, don't miss [GraphRouter](https://github.com/ulab-uiuc/GraphRouter) from U Lab — if you're interested in graph-based LLM Routers.
-
-
-
-**[2025.06]** 🌟 **Router-R1** was released.
-
-
-
-## 🛠️Environment Setup
+Create and activate the Python environment:
 
 ```bash
 conda create -n router-r1 python=3.9
 conda activate router-r1
+
 pip install torch==2.4.0 --index-url https://download.pytorch.org/whl/cu121
-pip3 install vllm==0.6.3 # or you can install 0.5.4, 0.4.2 and 0.3.1
-
-# verl
+pip install vllm==0.6.3
 pip install -e .
-
-# flash attention 2
-pip3 install flash-attn --no-build-isolation
+pip install flash-attn --no-build-isolation
 pip install wandb
 ```
 
+The project expects a CUDA environment that can run vLLM and veRL PPO training. The training scripts also set `NCCL_P2P_DISABLE=1` and `NCCL_IB_DISABLE=1` for more predictable single-node behavior.
 
+## Secrets And Config
 
-## 📊Experiments
-
-
-
-**(1) Data Preparation**
-
-The following scripts generate mixed training and testing datasets for Router-R1 by sampling from multiple QA datasets. By default, 7K examples are randomly selected from each of NQ and HotpotQA.
+Do not put API keys in tracked scripts. The training launcher reads environment files from these locations when they exist:
 
 ```bash
-# DATASET Choices: nq, triviaqa, popqa, hotpotqa, 2wikimultihopqa, musique, bamboogle
-# MODEL Choices: qwen, llama
+~/.config/router-r1/openrouter.env
+~/.config/router-r1/wandb.env
+$CONFIG_DIR/openrouter.env
+$CONFIG_DIR/wandb.env
+$SHARED_WANDB_FILE
+$SHARED_ENV_FILE
+$PROJECT_ROOT/.env.local
+```
 
-# Generate training set (default: 7K from nq + 7K from hotpotqa)
+Minimum OpenRouter config:
+
+```bash
+mkdir -p ~/.config/router-r1
+cat > ~/.config/router-r1/openrouter.env <<'EOF'
+export OPENROUTER_API_KEY='replace_with_your_real_openrouter_key'
+export OPENROUTER_API_BASE='https://openrouter.ai/api/v1'
+EOF
+chmod 600 ~/.config/router-r1/openrouter.env
+```
+
+Optional W&B config:
+
+```bash
+cat > ~/.config/router-r1/wandb.env <<'EOF'
+export WANDB_API_KEY='replace_with_your_real_wandb_key'
+EOF
+chmod 600 ~/.config/router-r1/wandb.env
+```
+
+Use `DISABLE_WANDB=1` to force console logging only.
+
+## Data
+
+Training expects Natural Questions / Hotpot-style parquet files under `DATA_DIR`:
+
+```text
+$DATA_DIR/train_nh_qwen.parquet
+$DATA_DIR/test_nh_qwen.parquet
+```
+
+The standard data generation scripts are still available:
+
+```bash
 python data_process/qa_train_merge.py --data_sources nq,hotpotqa --model qwen
-
-# Generate validation set
 python data_process/qa_test_merge.py --data_sources nq,hotpotqa --model qwen
-
-# Generate test set
-python data_process/qa_test_gen.py --data_sources nq --model qwen
+python data_process/qa_test_gen.py --data_sources 2wikimultihopqa --model qwen
 ```
 
-**(2) Training**
+Evaluation scripts can also generate per-dataset test parquet files under their own `eval_*` output directories.
 
-Start training Router-R1 with the following command:
+## Train
+
+From the `Router-R1-local` directory:
 
 ```bash
-# You can also set parameters such as cost_coe=0.9 in train.sh 
-# to adjust the trade-off between performance and cost (default is 0.0)
-
-# Additionally, you can customize the reward_metric to train Router-R1 
-# based on different final outcome rewards. 
-# Currently supported options are "em" (exact match) and "f1" (f1-score).
-
-bash train.sh
+PROJECT_ROOT="$PWD" \
+MODEL_ROOT="/path/to/models" \
+DATA_DIR="/path/to/data/nq_search" \
+CUDA_VISIBLE_DEVICES=0 \
+bash train_3b_isolated_a10080_fast.sh
 ```
 
+Important environment overrides:
 
-> \[!IMPORTANT\]
->
-> **Make sure to set your own API KEY in the `train.sh` script before running.**
-> Despite the use of a hierarchical reward function, we strongly recommend increasing the batch size if GPU resources permit, as it leads to more stable training.
+- `PROJECT_ROOT`: repository root for this local project.
+- `MODEL_ROOT`: directory containing `Qwen2.5-3B-Instruct`.
+- `DATA_DIR`: directory containing `train_nh_qwen.parquet` and `test_nh_qwen.parquet`.
+- `FRESH_START=1`: start from the base model with a timestamped run name.
+- `EXPERIMENT_NAME=...`: set a stable run name manually.
+- `ARTIFACT_ROOT=...`: move logs/checkpoints from the default artifact root.
+- `CKPT_ROOT=...`: force a specific checkpoint directory.
+- `DISABLE_WANDB=1`: disable W&B.
+- `REWARD_METRIC=hybrid|em|f1`: choose answer reward behavior.
+- `MAX_TURNS`, `ROUTER_POOL_SIZE`, `ROUTER_API_TIMEOUT`, `SAVE_FREQ`, `TEST_FREQ`: tune rollout and training behavior.
 
+Default outputs:
 
+```text
+$PROJECT_ROOT/training_runs/3b/logs/$EXPERIMENT_NAME.log
+$PROJECT_ROOT/training_runs/3b/launch_logs/
+$PROJECT_ROOT/training_runs/3b/checkpoints/$EXPERIMENT_NAME/
+```
 
-**(3) Evaluation**
+The training launcher auto-resumes from the latest actor and critic checkpoints inside `CKPT_ROOT` unless `FRESH_START=1` is set.
 
-You can evaluate Router-R1 on the previously generated test set with:
+## Evaluate
+
+### Validation-Style Checkpoint Eval
+
+Use this when you want to run the trained actor/critic through the PPO validation path:
 
 ```bash
-bash test.sh
+CKPT_EXPERIMENT_NAME="your-experiment-name" \
+STEP=225 \
+DATASETS="2wikimultihopqa" \
+bash scripts/eval_official_checkpoint.sh
 ```
 
-Make sure the test data has been generated beforehand using `qa_test_gen.py`.
-
-
-
-**(4) Inference**
-
-You can conduct inference with:
+If the checkpoint was produced by `train_3b_isolated_a10080_fast.sh`, point the eval script at the `training_runs` checkpoint layout explicitly:
 
 ```bash
-# NCCL_P2P_DISABLE=1 NCCL_IB_DISABLE=1
-CUDA_VISIBLE_DEVICES=2,3,4,5 python infer_vllm.py \
---question [YOUR_QUESTION] \
---model_path [YOUR_MODEL_PATH] \
---api_base [YOUR_API_BASE] \
---api_key [YOUR_API_KEY]
+CKPT_ROOT="$PWD/training_runs/3b/checkpoints/your-experiment-name" \
+TRAIN_FILE="/path/to/train_nh_qwen.parquet" \
+bash scripts/eval_official_checkpoint.sh
 ```
 
+### Generation-Based Multihop Eval
 
+Use this when you want generated parquet outputs and post-hoc QA metrics:
 
-## 🎯Configure Your Own LLM Routing Pool
-
-- **Step-1** 
-
-    + Set up your candidate LLM model descriptors in `data_process/prompt_pool.py`.
-
-    + 💡 You can write your own LLM descriptors manually, or use advanced models (e.g., GPT-4o) to generate them automatically. These descriptors capture the strengths, capabilities, or specialization areas of each candidate model, and are used during routing to inform model selection.
-
-- **Step-2**
-
-    + Run `data_process/qa_train_merge.py`, `data_process/qa_test_merge.py`, or `data_process/qa_test_gen.py` as needed to generate new training or test data.
-
-
-- **Step-3**
-
-    + Modify the `check_llm_name` function in `router_r1/llm_agent/route_service.py` to configure your own LLM routing pool parser.
-
-    + You should also update the `API_PRICE_1M_TOKENS` dictionary in the same file based on the API pricing of your selected models (see [Together API Pricing](https://www.together.ai/pricing) for reference).
-
-
-- **LAST**
-
-    + Remember to set your own API KEY in the `train.sh` script
-
-
-
-## Useful Resources from Other Awesome Works
-
-- [FusionFactory](http://arxiv.org/abs/2507.10540): Fusing LLM Capabilities with Routing Data. [![[code]](https://img.shields.io/github/stars/ulab-uiuc/FusionFactory)](https://github.com/ulab-uiuc/FusionFactory)
-
-- [CARROT](https://arxiv.org/abs/2502.03261): CARROT: A Cost Aware Rate Optimal Router. [![[code]](https://img.shields.io/github/stars/somerstep/CARROT)](https://github.com/somerstep/CARROT)
-
-
-
-## Acknowledgement
-
-We sincerely acknowledge the contributions of [Deepseek-R1](https://github.com/deepseek-ai/DeepSeek-R1) and [Search-R1](https://github.com/PeterGriffinJin/Search-R1), whose work has been a valuable source of inspiration. This project builds upon the foundations laid by [veRL](https://github.com/volcengine/verl), and we are deeply grateful for the open-source efforts and advancements made by these communities. 
-
-
-
-
-## Citation
-
-```bibtex
-@article{Router-R1,
-  title={Router-R1: Teaching LLMs Multi-Round Routing and Aggregation via Reinforcement Learning},
-  author={Haozhen Zhang and Tao Feng and Jiaxuan You},
-  journal={arXiv preprint arXiv:2506.09033},
-  year={2025}
-}
+```bash
+EXPERIMENT_NAME="your-experiment-name" \
+DATASETS="2wikimultihopqa musique bamboogle" \
+bash scripts/eval_multihop_checkpoint.sh
 ```
+
+Generated outputs are written to:
+
+```text
+eval_multihop/$EXPERIMENT_NAME/generated/
+```
+
+If your actor checkpoint is not under the default `verl_checkpoints_3b` layout, set `MODEL_PATH`:
+
+```bash
+MODEL_PATH="$PWD/training_runs/3b/checkpoints/your-experiment-name/actor/global_step_225" \
+bash scripts/eval_multihop_checkpoint.sh
+```
+
+## Analyze Generated Outputs
+
+Summarize EM/F1, decomposition behavior, search counts, and model usage:
+
+```bash
+python scripts/evaluate_qa_generation.py \
+  --input_parquet eval_multihop/$EXPERIMENT_NAME/generated/2wikimultihopqa.parquet
+```
+
+Sample decomposition traces:
+
+```bash
+python scripts/sample_decompose_traces.py \
+  --input_parquet eval_multihop/$EXPERIMENT_NAME/generated/2wikimultihopqa.parquet \
+  --limit 5
+```
+
+Use `--mode random --seed 0` to inspect random examples, or `--full` to print full action traces.
+
+## Reward Summary
+
+The current local reward is documented in `docs/reward_design.md`. At a high level:
+
+```text
+reward_total = reward_base + decompose_aux_reward
+```
+
+With the default `REWARD_METRIC=hybrid`:
+
+- EM remains the primary metric.
+- F1 can add a small shaping bonus when the final answer is partially correct.
+- Format penalties are capped for fully correct final answers.
+- API cost is computed and logged, but only affects reward when `cost_coe > 0`.
+- Decomposition behavior can receive an auxiliary shaping term.
+
+## Routing Pool
+
+Candidate model descriptors live in `data_process/prompt_pool.py`.
+
+When changing the routing pool:
+
+1. Update model descriptors in `data_process/prompt_pool.py`.
+2. Update model-name parsing in `router_r1/llm_agent/route_service.py`.
+3. Update API pricing in `router_r1/llm_agent/route_service.py`.
+4. Regenerate training/eval data if prompt format or candidate model metadata changes.
+
+## Operational Notes
+
+- The default paths in `train_3b_isolated_a10080_fast.sh` are cluster-oriented. Override `PROJECT_ROOT`, `MODEL_ROOT`, and `DATA_DIR` for a local machine.
+- Evaluation scripts still have some defaults for the older `verl_checkpoints_3b/$EXPERIMENT_NAME` layout. Prefer explicit `CKPT_ROOT`, `ACTOR_PATH`, `CRITIC_PATH`, or `MODEL_PATH` when evaluating.
+- Keep secrets in environment files or runtime environment variables, not in committed scripts.
+- Use `NEW_INSTANCE_QUICKSTART.md` for AutoDL restore and shared data/config setup.

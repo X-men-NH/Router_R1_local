@@ -1,4 +1,4 @@
-# Router-R1
+Granule-R1
 
 
 Official implementation of NeurIPS'25 Poster: Router-R1: Teaching LLMs Multi-Round Routing and Aggregation via Reinforcement Learning

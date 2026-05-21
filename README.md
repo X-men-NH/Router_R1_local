@@ -1,6 +1,6 @@
-# Router-R1 Local
+# Granule-R1 
 
-`Router-R1-local` is a local research project for decomposition-aware multi-hop LLM routing. It trains and evaluates a 3B router that can break a question into subquestions, route each step to external LLMs through OpenRouter, aggregate the intermediate evidence, and produce a final answer.
+`Granule-R1` is a local research project for decomposition-aware multi-hop LLM routing. It trains and evaluates a 3B router that can break a question into subquestions, route each step to external LLMs through OpenRouter, aggregate the intermediate evidence, and produce a final answer.
 
 This README describes this local project only. It does not use the upstream `train.sh` / `test.sh` workflow.
 
@@ -101,7 +101,7 @@ Evaluation scripts can also generate per-dataset test parquet files under their 
 
 ## Train
 
-From the `Router-R1-local` directory:
+From the `Granule-R1` directory:
 
 ```bash
 PROJECT_ROOT="$PWD" \
